@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Unified Weather, Accessibility & Routing Map App</title>
+    <style>
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        body, html {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        }
+        
+        /* Floating Map Controls */
+        #map-controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 5;
+            background-color: white;
+            padding: 16px 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+            width: 280px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        #map-controls h3 {
+            margin: 0 0 8px 0;
+            font-size: 15px;
+            color: #202124;
+        }
+
+        .control-section {
+            border-bottom: 1px solid #e8eaed;
+            padding-bottom: 12px;
+            margin-bottom: 12px;
+        }
+        .control-section:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+            margin-bottom: 0;
+        }
+
+        /* Input and Button Styles */
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .input-group input, .input-group select {
+            padding: 8px 10px;
+            border: 1px solid #dadce0;
+            border-radius: 6px;
+            font-size: 12px;
+            outline: none;
+        }
+        .input-group input:focus, .input-group select:focus {
+            border-color: #4285F4;
+        }
+
+        .btn-row {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .btn-primary {
+            background: #4285F4;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+            flex: 1;
+        }
+        .btn-primary:hover { background: #1a73e8; }
+        .btn-secondary {
+            background: #f1f3f4;
+            color: #3c4043;
+            border: 1px solid #dadce0;
+            padding: 8px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .btn-secondary:hover { background: #e8eaed; }
+
+        /* Route Summary Box */
+        #route-info {
+            display: none;
+            background: #e8f0fe;
+            border: 1px solid #aecbfa;
+            color: #174ea6;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            margin-top: 10px;
+            line-height: 1.4;
+        }
+
+        /* Weather Marker Styling */
+        .weather-marker {
+            background: #ffffff;
+            color: #222;
+            padding: 6px 12px;
+            border-radius: 30px;
+            border: 2px solid #4285F4;
+            font-weight: bold;
+            font-size: 13px;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.16);
+            white-space: nowrap;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .weather-marker:hover {
+            transform: scale(1.15);
+            box-shadow: 0 6px 14px rgba(66, 133, 244, 0.4);
+            border-color: #1a73e8;
+        }
+
+        /* Origin Pin Styling */
+        .origin-marker {
+            background: #34A853;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 12px;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.2);
+            white-space: nowrap;
+        }
+
+        /* Modern Unified Card Styling */
+        .unified-popup {
+            color: #202124;
+            width: 310px;
+            padding: 4px;
+        }
+        .place-header {
+            border-bottom: 1px solid #e8eaed;
+            padding-bottom: 10px;
+            margin-bottom: 10px;
+        }
+        .place-header h3 {
+            margin: 0 0 4px 0;
+            font-size: 17px;
+            color: #1a73e8;
+            font-weight: 600;
+            line-height: 1.25;
+        }
+        .place-header p {
+            margin: 0;
+            font-size: 12px;
+            color: #5f6368;
+            line-height: 1.35;
+        }
+
+        .accessibility-badge {
+            font-size: 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px;
+            border-radius: 6px;
+            margin-top: 8px;
+            font-weight: 500;
+        }
+        .accessibility-badge.accessible { background-color: #e8f0fe; color: #1967d2; }
+        .accessibility-badge.inaccessible { background-color: #fce8e6; color: #c5221f; }
+        .accessibility-badge.unknown { background-color: #f1f3f4; color: #5f6368; }
+
+        .weather-section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #5f6368;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 10px 0 6px 0;
+        }
+
+        .weather-details-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            background: #f8f9fa;
+            padding: 10px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            border: 1px solid #f1f3f4;
+        }
+
+        .hourly-container {
+            display: flex;
+            justify-content: space-between;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .hourly-card {
+            background: #ffffff;
+            border: 1px solid #dadce0;
+            border-radius: 8px;
+            padding: 8px 4px;
+            text-align: center;
+            flex: 1;
+            font-size: 11px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        }
+        .hourly-card .time { font-weight: 600; color: #5f6368; margin-bottom: 4px; font-size: 10px; }
+        .hourly-card .icon { font-size: 18px; margin: 2px 0; }
+        .hourly-card .temp { color: #202124; font-weight: bold; }
+
+        .route-btn-card {
+            width: 100%;
+            margin-top: 10px;
+            background: #1a73e8;
+            color: white;
+            border: none;
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        .route-btn-card:hover { background: #1557b0; }
+    </style>
+</head>
+<body>
+
+    <div id="map-controls">
+        <!-- 🗺️ Search & Layer Control -->
+        <div class="control-section">
+            <h3>Explore Location</h3>
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 13px;">
+                <input type="checkbox" id="toggle-weather" checked>
+                <span>Show Weather Pins</span>
+            </label>
+
+            <div class="input-group">
+                <input type="text" id="city-search-input" placeholder="Search city or place..." />
+                <button id="search-btn" class="btn-primary">Search Location</button>
+            </div>
+        </div>
+
+        <!-- 🚗 Pathfinding / Directions Control -->
+        <div class="control-section">
+            <h3>Get Directions</h3>
+            <div class="input-group">
+                <input type="text" id="route-origin" placeholder="Origin (e.g. Auckland Central)" />
+                <input type="text" id="route-destination" placeholder="Destination (e.g. Auckland Museum)" />
+                
+                <select id="route-mode">
+                    <option value="DRIVING">🚗 Driving (Car)</option>
+                    <option value="TRANSIT">🚆 Public Transport</option>
+                </select>
+            </div>
+
+            <div class="btn-row">
+                <button id="get-route-btn" class="btn-primary">Get Route</button>
+                <button id="clear-route-btn" class="btn-secondary">Clear</button>
+            </div>
+
+            <div id="route-info"></div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script>
+        let map;
+        let weatherInfoWindow;
+        let activeMarkers = [];
+        let weatherLayerVisible = true;
+        let AdvancedMarkerElement;
+
+        // Directions Services
+        let directionsService;
+        let directionsRenderer;
+
+        function getWeatherIcon(code, rain, isDay = 1) {
+            if (rain > 0) return "🌧️";
+            if (code >= 95) return "⚡";
+
+            if (isDay === 1) {
+                if (code === 0) return "☀️";
+                if (code <= 3) return "⛅";
+                return "☁️";
+            } else {
+                if (code === 0) return "🌙";
+                if (code <= 3) return "☁️";
+                return "☁️";
+            }
+        }
+
+        function formatHourString(isoStr) {
+            if (!isoStr || !isoStr.includes("T")) return "";
+            const hour = parseInt(isoStr.split("T")[1].split(":")[0], 10);
+            const ampm = hour >= 12 ? 'PM' : 'AM';
+            const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+            return `${hour12} ${ampm}`;
+        }
+
+        function clearMarkers() {
+            activeMarkers.forEach(m => m.map = null);
+            activeMarkers = [];
+        }
+
+        async function initMap() {
+            const { Map, InfoWindow } = await google.maps.importLibrary("maps");
+            const markerLib = await google.maps.importLibrary("marker");
+            await google.maps.importLibrary("routes");
+
+            AdvancedMarkerElement = markerLib.AdvancedMarkerElement;
+            weatherInfoWindow = new InfoWindow();
+
+            // Suppress default markers so we can render our custom Origin & Destination Weather Pins!
+            directionsService = new google.maps.DirectionsService();
+            directionsRenderer = new google.maps.DirectionsRenderer({
+                suppressMarkers: true,
+                polylineOptions: {
+                    strokeColor: "#1a73e8",
+                    strokeWeight: 6,
+                    strokeOpacity: 0.85
+                }
+            });
+
+            map = new Map(document.getElementById("map"), {
+                center: { lat: -36.8485, lng: 174.7633 }, // Auckland, NZ
+                zoom: 12,
+                mapId: "DEMO_MAP_ID"
+            });
+
+            directionsRenderer.setMap(map);
+
+            // Map Click Listener
+            map.addListener("click", async (mapsMouseEvent) => {
+                if (weatherInfoWindow) weatherInfoWindow.close();
+                clearMarkers();
+
+                if (!weatherLayerVisible) return;
+
+                let placeInfo = {
+                    name: "Selected Location",
+                    address: "",
+                    accessibility: null
+                };
+
+                if ("placeId" in mapsMouseEvent && mapsMouseEvent.placeId) {
+                    try {
+                        const { Place } = await google.maps.importLibrary("places");
+                        const place = new Place({ id: mapsMouseEvent.placeId });
+                        await place.fetchFields({ fields: ["displayName", "formattedAddress", "accessibilityOptions"] });
+
+                        placeInfo.name = place.displayName || "Selected Place";
+                        placeInfo.address = place.formattedAddress || "";
+                        if (place.accessibilityOptions && place.accessibilityOptions.hasWheelchairAccessibleEntrance !== undefined) {
+                            placeInfo.accessibility = place.accessibilityOptions.hasWheelchairAccessibleEntrance;
+                        }
+                    } catch (e) {
+                        console.error("Places API fetch error:", e);
+                    }
+                }
+
+                createWeatherMarker(mapsMouseEvent.latLng, placeInfo);
+            });
+
+            // UI Event Listeners
+            document.getElementById("toggle-weather").addEventListener("change", (e) => {
+                weatherLayerVisible = e.target.checked;
+                activeMarkers.forEach(m => m.map = weatherLayerVisible ? map : null);
+                if (!weatherLayerVisible && weatherInfoWindow) weatherInfoWindow.close();
+            });
+
+            document.getElementById("search-btn").addEventListener("click", () => searchLocation(document.getElementById("city-search-input").value));
+            document.getElementById("city-search-input").addEventListener("keypress", (e) => { if (e.key === "Enter") searchLocation(e.target.value); });
+
+            // Pathfinding Event Listeners
+            document.getElementById("get-route-btn").addEventListener("click", calculateAndDisplayRoute);
+            document.getElementById("clear-route-btn").addEventListener("click", clearRoute);
+        }
+
+        // Calculate Route and Display Weather at Destination
+        function calculateAndDisplayRoute() {
+            const origin = document.getElementById("route-origin").value.trim();
+            const destination = document.getElementById("route-destination").value.trim();
+            const mode = document.getElementById("route-mode").value;
+            const routeInfoDiv = document.getElementById("route-info");
+
+            if (!origin || !destination) {
+                alert("Please enter both Origin and Destination.");
+                return;
+            }
+
+            directionsService.route(
+                {
+                    origin: origin,
+                    destination: destination,
+                    travelMode: google.maps.TravelMode[mode]
+                },
+                async (response, status) => {
+                    if (status === "OK") {
+                        directionsRenderer.setDirections(response);
+                        const leg = response.routes[0].legs[0];
+                        
+                        const modeIcon = mode === 'DRIVING' ? '🚗 Driving' : '🚆 Transit';
+                        routeInfoDiv.style.display = "block";
+                        routeInfoDiv.innerHTML = `
+                            <b>${modeIcon} Route Found:</b><br>
+                            ⏱️ <b>Time:</b> ${leg.duration.text}<br>
+                            📏 <b>Distance:</b> ${leg.distance.text}
+                        `;
+
+                        // Clear existing custom pins
+                        if (weatherInfoWindow) weatherInfoWindow.close();
+                        clearMarkers();
+
+                        // 1. Create Start/Origin Pin
+                        const originDiv = document.createElement("div");
+                        originDiv.className = "origin-marker";
+                        originDiv.innerText = "🟢 Start";
+                        const originMarker = new AdvancedMarkerElement({
+                            map: map,
+                            position: leg.start_location,
+                            content: originDiv
+                        });
+                        activeMarkers.push(originMarker);
+
+                        // 2. Create Destination Weather Marker and automatically open the unified card
+                        const placeInfo = {
+                            name: destination,
+                            address: leg.end_address || "",
+                            accessibility: null
+                        };
+
+                        const destMarker = await createWeatherMarker(leg.end_location, placeInfo, true);
+
+                    } else {
+                        routeInfoDiv.style.display = "none";
+                        alert("Could not calculate directions: " + status);
+                    }
+                }
+            );
+        }
+
+        function clearRoute() {
+            directionsRenderer.setDirections({ routes: [] });
+            document.getElementById("route-info").style.display = "none";
+            document.getElementById("route-origin").value = "";
+            document.getElementById("route-destination").value = "";
+            if (weatherInfoWindow) weatherInfoWindow.close();
+            clearMarkers();
+        }
+
+        window.setDestinationAndRoute = function(placeName) {
+            document.getElementById("route-destination").value = placeName;
+            if (!document.getElementById("route-origin").value) {
+                document.getElementById("route-origin").value = "Auckland Central";
+            }
+            calculateAndDisplayRoute();
+        };
+
+        async function searchLocation(query) {
+            if (!query || !query.trim()) return;
+            try {
+                const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query.trim())}&count=1&language=en&format=json`;
+                const res = await fetch(url);
+                const data = await res.json();
+
+                if (!data.results || data.results.length === 0) {
+                    alert("Location not found!");
+                    return;
+                }
+
+                const result = data.results[0];
+                const pos = new google.maps.LatLng(result.latitude, result.longitude);
+
+                map.panTo(pos);
+                map.setZoom(12);
+
+                if (weatherInfoWindow) weatherInfoWindow.close();
+                clearMarkers();
+
+                if (weatherLayerVisible) {
+                    createWeatherMarker(pos, { name: result.name, address: result.country || "", accessibility: null });
+                }
+            } catch (err) {
+                console.error("Search error:", err);
+            }
+        }
+
+        async function fetchDetailedWeather(lat, lng) {
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,is_day&hourly=temperature_2m,weather_code,precipitation,is_day&timezone=auto`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error("Weather fetch failed");
+            return await response.json();
+        }
+
+        async function createWeatherMarker(position, placeInfo, autoOpen = false) {
+            const markerDiv = document.createElement("div");
+            markerDiv.className = "weather-marker";
+            markerDiv.innerText = "⏳ Loading...";
+
+            const marker = new AdvancedMarkerElement({
+                map: map,
+                position: position,
+                content: markerDiv,
+            });
+
+            activeMarkers.push(marker);
+
+            const lat = typeof position.lat === 'function' ? position.lat() : position.lat;
+            const lng = typeof position.lng === 'function' ? position.lng() : position.lng;
+
+            try {
+                const data = await fetchDetailedWeather(lat, lng);
+                const current = data.current;
+                const temp = Math.round(current.temperature_2m);
+                const currentIcon = getWeatherIcon(current.weather_code, current.precipitation, current.is_day);
+
+                markerDiv.innerHTML = `${temp}°C ${currentIcon} <span style="font-size: 10px; color: #1a73e8; margin-left: 3px;">ℹ️</span>`;
+
+                let accessibilityHTML = "";
+                if (placeInfo.accessibility === true) {
+                    accessibilityHTML = `<div class="accessibility-badge accessible">♿ Wheelchair accessible entrance</div>`;
+                } else if (placeInfo.accessibility === false) {
+                    accessibilityHTML = `<div class="accessibility-badge inaccessible">🚫 No wheelchair entrance</div>`;
+                } else if (placeInfo.address) {
+                    accessibilityHTML = `<div class="accessibility-badge unknown">♿ Accessibility status unknown</div>`;
+                }
+
+                const hourly = data.hourly;
+                let hourlyHTML = "";
+                
+                const currentIsoTime = current.time;
+                let startIdx = (hourly && hourly.time) ? hourly.time.findIndex(t => t >= currentIsoTime) : 0;
+                if (startIdx === -1) startIdx = 0;
+
+                for (let i = startIdx; i < startIdx + 5 && i < hourly.time.length; i++) {
+                    const timeLabel = (i === startIdx) ? 'Now' : formatHourString(hourly.time[i]);
+                    const hTemp = Math.round(hourly.temperature_2m[i]);
+                    const hCode = hourly.weather_code[i];
+                    const hRain = hourly.precipitation[i];
+                    const hIsDay = hourly.is_day[i];
+                    const hIcon = getWeatherIcon(hCode, hRain, hIsDay);
+
+                    hourlyHTML += `
+                        <div class="hourly-card">
+                            <div class="time">${timeLabel}</div>
+                            <div class="icon">${hIcon}</div>
+                            <div class="temp">${hTemp}°C</div>
+                        </div>
+                    `;
+                }
+
+                const popupContent = `
+                    <div class="unified-popup">
+                        <div class="place-header">
+                            <h3>📍 Destination: ${placeInfo.name}</h3>
+                            ${placeInfo.address ? `<p>${placeInfo.address}</p>` : ''}
+                            ${accessibilityHTML}
+                        </div>
+                        
+                        <div class="weather-section-title">Current Weather</div>
+                        <div class="weather-details-grid">
+                            <div><b>Temp:</b> ${temp}°C</div>
+                            <div><b>Wind:</b> ${current.wind_speed_10m} km/h</div>
+                            <div><b>Humidity:</b> ${current.relative_humidity_2m}%</div>
+                            <div><b>Rain:</b> ${current.precipitation} mm</div>
+                        </div>
+
+                        <div class="weather-section-title">5-Hour Forecast</div>
+                        <div class="hourly-container">${hourlyHTML}</div>
+                    </div>
+                `;
+
+                // Add manual click listener
+                markerDiv.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    weatherInfoWindow.setContent(popupContent);
+                    weatherInfoWindow.open(map, marker);
+                });
+
+                // Auto-open if requested (e.g., when route calculation completes)
+                if (autoOpen) {
+                    weatherInfoWindow.setContent(popupContent);
+                    weatherInfoWindow.open(map, marker);
+                }
+
+                return marker;
+
+            } catch (err) {
+                console.error("Weather error:", err);
+                markerDiv.innerText = "⚠️ N/A";
+            }
+        }
+    </script>
+
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAuTuQmXZCZzkp0OpMuFqZHq-xOZGoDWwM&callback=initMap&v=weekly&libraries=places,routes" async defer></script>
+</body>
+</html>
