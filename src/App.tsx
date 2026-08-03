@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Loader } from '@googlemaps/js-api-loader';
 import './styles.css';
 
-const GOOGLE_MAPS_API_KEY = 'AIzaSyAuTuQmXZCZzkp0OpMuFqZHq-xOZGoDWwM';
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
 interface PlaceInfo {
   id?: string;
@@ -204,9 +204,11 @@ export const App: React.FC = () => {
         fields: ['displayName', 'formattedAddress', 'accessibilityOptions', 'googleMapsURI'],
       });
 
-      let name = 'Selected Location';
-      if (place.displayName) {
-        name = typeof place.displayName === 'object' ? place.displayName.text || place.displayName : place.displayName;
+      // Extract Name
+      let name = "Selected Location";
+      const dn = place.displayName as any;
+      if (dn) {
+        name = typeof dn === 'string' ? dn : dn.text || "Selected Location";
       }
 
       let isAccessible: boolean | null = null;
@@ -514,7 +516,7 @@ export const App: React.FC = () => {
 
   const clearRoute = () => {
     if (directionsRendererRef.current) {
-      directionsRendererRef.current.setDirections({ routes: [] });
+      directionsRendererRef.current.setDirections({ routes: [] } as any);
     }
     setRouteSummary(null);
     setRouteOrigin('');
@@ -526,14 +528,14 @@ export const App: React.FC = () => {
   return (
     <div>
       <div id="map-controls">
-        <div class="control-section">
+        <div className="control-section">
           <h3>Explore Location</h3>
           <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
             <input type="checkbox" checked={showWeather} onChange={handleToggleWeather} />
             <span>Show Weather Pins</span>
           </label>
 
-          <div class="input-group">
+          <div className="input-group">
             <input
               type="text"
               placeholder="Search city or place..."
@@ -541,15 +543,15 @@ export const App: React.FC = () => {
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSearchLocation()}
             />
-            <button class="btn-primary" onClick={handleSearchLocation}>
+            <button className="btn-primary" onClick={handleSearchLocation}>
               Search Location
             </button>
           </div>
         </div>
 
-        <div class="control-section">
+        <div className="control-section">
           <h3>Get Directions</h3>
-          <div class="input-group">
+          <div className="input-group">
             <input
               type="text"
               placeholder="Origin (e.g. Auckland Central)"
@@ -569,11 +571,11 @@ export const App: React.FC = () => {
             </select>
           </div>
 
-          <div class="btn-row">
-            <button class="btn-primary" onClick={calculateAndDisplayRoute}>
+          <div className="btn-row">
+            <button className="btn-primary" onClick={calculateAndDisplayRoute}>
               Get Route
             </button>
-            <button class="btn-secondary" onClick={clearRoute}>
+            <button className="btn-secondary" onClick={clearRoute}>
               Clear
             </button>
           </div>
