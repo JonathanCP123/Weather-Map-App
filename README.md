@@ -18,6 +18,7 @@ Check out the live application hosted on GitHub Pages:
 * **🌦️ Integrated Weather Updates**: View location-based weather information while exploring places and planning trips.
 * **⚡ Fast & Modern Build**: Powered by Vite for instant Hot Module Replacement (HMR) and fast build times.
 * **📘 Fully Typed**: Written with TypeScript for clean, predictable, and maintainable code.
+* **📱 Mobile-First Responsive UI:** Floating control panel on desktop that automatically transitions to a touch-optimized bottom drawer on mobile devices.
 
 ---
 
