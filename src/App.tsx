@@ -43,6 +43,21 @@ const DEFAULT_CENTER: LatLngLike = { lat: -36.8485, lng: 174.7633 }; // Auckland
 const START_ZOOM = 12;
 const MY_LOCATION_LABEL = 'My location';
 
+// ---------------------------------------------------------------------------
+// Card size vs. zoom: the card is a fixed number of pixels, so when the map is
+// zoomed out it would cover more and more of it. Instead:
+//   zoom >= CARD_FULL_MIN_ZOOM        full size
+//   zoom >= CARD_HIDE_BELOW_ZOOM      slightly smaller ("compact")
+//   below that                        card tucked away (the weather pin stays);
+//                                     it comes back when you zoom in again.
+// Change these two numbers to taste (bigger number = the card shrinks/hides sooner).
+// ---------------------------------------------------------------------------
+const CARD_FULL_MIN_ZOOM = 12;
+const CARD_HIDE_BELOW_ZOOM = 10;
+type CardBand = 'full' | 'compact' | 'hidden';
+const cardBandForZoom = (zoom: number): CardBand =>
+  zoom >= CARD_FULL_MIN_ZOOM ? 'full' : zoom >= CARD_HIDE_BELOW_ZOOM ? 'compact' : 'hidden';
+
 /**
  * Asks the browser for the precise position. This triggers the browser's permission
  * prompt, so only call it from a user tap (the "locate me" buttons).
@@ -268,6 +283,13 @@ export const App: React.FC = () => {
   const currentWeatherDataRef = useRef<any>(null);
   const weatherLayerVisibleRef = useRef<boolean>(true);
 
+  // Which card is showing, which pin it belongs to, and the zoom-based size state
+  const currentCardRef = useRef<'place' | 'weather'>('place');
+  const currentMarkerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
+  const cardBandRef = useRef<CardBand>('full');
+  const cardHiddenByZoomRef = useRef<boolean>(false); // true = we hid the card because of zoom, so bring it back later
+  const infoOpenRef = useRef<boolean>(false); // is the InfoWindow currently open?
+
   // Stale-request guard (see clearMarkers): the generation counter changes every time
   // the pins are cleared; the AbortController cancels the in-flight weather request.
   const markerGenerationRef = useRef<number>(0);
@@ -284,6 +306,8 @@ export const App: React.FC = () => {
   // has moved on, i.e. the user clicked / searched / routed again in the meantime.
   const clearMarkers = (): number => {
     markerGenerationRef.current += 1;
+    cardHiddenByZoomRef.current = false;
+    currentMarkerRef.current = null;
     if (weatherAbortRef.current) {
       weatherAbortRef.current.abort();
       weatherAbortRef.current = null;
@@ -317,7 +341,7 @@ export const App: React.FC = () => {
       : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(placeInfo.name + ' ' + placeInfo.address)}`;
 
     return `
-      <div class="place-card-popup">
+      <div class="place-card-popup ${cardBandRef.current === 'full' ? '' : 'card-compact'}">
           <div class="place-card-header">
               <h3 class="place-card-title">${escapeHtml(placeInfo.name)}</h3>
               <a href="${escapeHtml(mapsLink)}" target="_blank" rel="noopener noreferrer" class="place-card-link-btn" title="Open in Google Maps">↗</a>
@@ -368,7 +392,7 @@ export const App: React.FC = () => {
     }
 
     return `
-      <div class="unified-popup">
+      <div class="unified-popup ${cardBandRef.current === 'full' ? '' : 'card-compact'}">
           <div class="place-header">
               <div class="back-to-place-btn" onclick="window.showPlaceCard()">← Back to Place Info</div>
               <h3>📍 Destination: ${escapeHtml(placeInfo.name)}</h3>
@@ -394,12 +418,14 @@ export const App: React.FC = () => {
   useEffect(() => {
     window.showPlaceCard = () => {
       if (currentPlaceInfoRef.current && infoWindowRef.current) {
+        currentCardRef.current = 'place';
         infoWindowRef.current.setContent(renderPlaceCardHTML(currentPlaceInfoRef.current));
       }
     };
 
     window.showWeatherCard = () => {
       if (currentPlaceInfoRef.current && currentWeatherDataRef.current && infoWindowRef.current) {
+        currentCardRef.current = 'weather';
         infoWindowRef.current.setContent(
           renderWeatherCardHTML(currentPlaceInfoRef.current, currentWeatherDataRef.current)
         );
@@ -526,6 +552,7 @@ export const App: React.FC = () => {
     });
 
     activeMarkersRef.current.push(marker);
+    currentMarkerRef.current = marker;
 
     const lat = typeof position.lat === 'function' ? position.lat() : position.lat;
     const lng = typeof position.lng === 'function' ? position.lng() : position.lng;
@@ -554,6 +581,7 @@ export const App: React.FC = () => {
         e.stopPropagation();
         currentPlaceInfoRef.current = placeInfo;
         currentWeatherDataRef.current = weatherData;
+        cardHiddenByZoomRef.current = false; // the user opened it on purpose
         window.showWeatherCard();
         if (infoWindowRef.current) infoWindowRef.current.open(targetMap, marker);
       });
@@ -561,8 +589,14 @@ export const App: React.FC = () => {
       // Do not pop the card open on a pin that is hidden because the checkbox was
       // unticked while the weather was still loading.
       if (autoOpen && weatherLayerVisibleRef.current) {
-        window.showPlaceCard();
-        infoWindowRef.current.open(targetMap, marker);
+        if (cardBandRef.current === 'hidden') {
+          // Zoomed too far out for a card: show it when the user zooms back in.
+          currentCardRef.current = 'place';
+          cardHiddenByZoomRef.current = true;
+        } else {
+          window.showPlaceCard();
+          infoWindowRef.current.open(targetMap, marker);
+        }
       }
     } catch (err: any) {
       // An aborted request or a superseded pin is expected, not an error.
@@ -605,7 +639,23 @@ export const App: React.FC = () => {
       placesLibRef.current = placesLib;
 
       // maxWidth is a hard cap (px) on the card, whatever its content or the map size.
-      infoWindowRef.current = new InfoWindow({ maxWidth: 320 });
+      const infoWindow = new InfoWindow({ maxWidth: 320 });
+      // Google has no "is it open?" query, so keep track of it ourselves.
+      const originalOpen = infoWindow.open.bind(infoWindow);
+      const originalClose = infoWindow.close.bind(infoWindow);
+      (infoWindow as any).open = (...args: any[]) => {
+        infoOpenRef.current = true;
+        return (originalOpen as any)(...args);
+      };
+      infoWindow.close = () => {
+        infoOpenRef.current = false;
+        originalClose();
+      };
+      infoWindow.addListener('closeclick', () => {
+        infoOpenRef.current = false;
+        cardHiddenByZoomRef.current = false; // the user closed it: don't bring it back by itself
+      });
+      infoWindowRef.current = infoWindow;
       directionsServiceRef.current = new google.maps.DirectionsService();
       directionsRendererRef.current = new google.maps.DirectionsRenderer({
         suppressMarkers: true,
@@ -630,6 +680,39 @@ export const App: React.FC = () => {
       placesServiceRef.current = new google.maps.places.PlacesService(map);
       geocoderRef.current = new google.maps.Geocoder();
       setMapInstance(map);
+
+      // Shrink / tuck away / restore the card as the user zooms
+      cardBandRef.current = cardBandForZoom(map.getZoom() ?? START_ZOOM);
+      map.addListener('zoom_changed', () => {
+        const zoom = map.getZoom();
+        if (typeof zoom !== 'number') return;
+        const band = cardBandForZoom(zoom);
+        if (band === cardBandRef.current) return; // only react when a threshold is crossed
+        cardBandRef.current = band;
+
+        const iw = infoWindowRef.current;
+        if (!iw) return;
+        const redraw = () => (currentCardRef.current === 'weather' ? window.showWeatherCard() : window.showPlaceCard());
+
+        if (band === 'hidden') {
+          if (infoOpenRef.current) {
+            iw.close();
+            cardHiddenByZoomRef.current = true;
+          }
+          return;
+        }
+        if (cardHiddenByZoomRef.current) {
+          // Zoomed back in: bring the card back on the same pin
+          cardHiddenByZoomRef.current = false;
+          const marker = currentMarkerRef.current;
+          if (marker && marker.map && weatherLayerVisibleRef.current && currentPlaceInfoRef.current) {
+            redraw();
+            iw.open(map, marker);
+          }
+          return;
+        }
+        if (infoOpenRef.current) redraw(); // crossed full <-> compact: re-render at the new size
+      });
 
       // Map Click Event Listener
       map.addListener('click', async (mapsMouseEvent: any) => {

@@ -454,9 +454,34 @@ body, html, #root {
 .unified-popup {
   box-sizing: border-box;
   max-width: min(320px, calc(100vw - 96px));
-  max-height: 40vh;
+  max-height: 60vh;                              /* never taller than 60% of the screen... */
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+/* --- Zoomed-out cards: a bit smaller (JS adds .card-compact between zoom 10 and 12,
+       and tucks the card away entirely when zoomed out further) ----------------- */
+.card-compact {
+  zoom: 0.85;
+}
+
+/* Hourly forecast: the 5 boxes must SHRINK to fit instead of overflowing the card
+   (this fixes the clipped "6 PM" box and the stray scrollbar under the card) */
+.hourly-container {
+  gap: 4px;
+}
+.hourly-card {
+  min-width: 0;
+  padding: 6px 2px;
+}
+.hourly-card .temp {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Google's own InfoWindow wrapper must never scroll sideways */
+.gm-style .gm-style-iw-d {
+  overflow-x: hidden !important;
 }
 
 /* --- The panel: header row + body ----------------------------------------- */
