@@ -12,19 +12,22 @@ body, html, #root {
   width: 100%;
 }
 
-/* Floating Map Controls */
+/* Floating Map Controls Panel */
 #map-controls {
   position: absolute;
   top: 20px;
   left: 20px;
   z-index: 5;
-  background-color: white;
+  background-color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(8px);
   padding: 16px 20px;
-  border-radius: 10px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
-  width: 280px;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+  width: 310px;
   max-height: 90vh;
   overflow-y: auto;
+  box-sizing: border-box;
+  transition: all 0.3s ease;
 }
 
 #map-controls h3 {
@@ -58,6 +61,8 @@ body, html, #root {
   border-radius: 6px;
   font-size: 12px;
   outline: none;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .input-group input:focus, .input-group select:focus {
@@ -110,6 +115,74 @@ body, html, #root {
   font-size: 12px;
   margin-top: 10px;
   line-height: 1.4;
+}
+
+/* ==========================================================================
+   Unique Pill Switch Toggle
+   ========================================================================== */
+.custom-map-toggle-wrapper {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin: 4px 0 8px 0;
+}
+
+.pill-toggle {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 38px;
+  background-color: #e9ecef;
+  border-radius: 20px;
+  border: none;
+  padding: 3px;
+  cursor: pointer;
+  overflow: hidden;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.08);
+}
+
+.toggle-option {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5f6368;
+  transition: color 0.3s ease;
+}
+
+.pill-slider {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  height: calc(100% - 6px);
+  border-radius: 17px;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.3s ease;
+  z-index: 1;
+}
+
+/* Toggle Active States */
+.active-standard .pill-slider {
+  transform: translateX(0);
+  background-color: #ffffff;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
+
+.active-standard .toggle-option.standard {
+  color: #1a73e8;
+}
+
+.active-satellite .pill-slider {
+  transform: translateX(100%);
+  background-color: #202124;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
+
+.active-satellite .toggle-option.satellite {
+  color: #ffffff;
 }
 
 /* Weather Marker Styling */
@@ -327,3 +400,37 @@ body, html, #root {
 .hourly-card .time { font-weight: 600; color: #5f6368; margin-bottom: 4px; font-size: 10px; }
 .hourly-card .icon { font-size: 18px; margin: 2px 0; }
 .hourly-card .temp { color: #202124; font-weight: bold; }
+
+/* ==========================================================================
+   Mobile Scalability (Phones & Mobile Browsers)
+   ========================================================================== */
+@media screen and (max-width: 600px) {
+  #map-controls {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 55vh;
+    border-radius: 20px 20px 0 0;
+    padding: 14px 16px;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.2);
+  }
+
+  #map-controls h3 {
+    font-size: 14px;
+  }
+
+  .pill-toggle {
+    height: 34px;
+  }
+
+  .toggle-option {
+    font-size: 11px;
+  }
+
+  .btn-primary, .btn-secondary {
+    padding: 8px;
+    font-size: 11px;
+  }
+}
