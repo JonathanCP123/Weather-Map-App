@@ -25,6 +25,57 @@ declare global {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pure helpers. They use no component state, so they live outside the component
+// instead of being re-created on every render.
+// ---------------------------------------------------------------------------
+
+/** Escapes text before it is placed inside an HTML string (InfoWindow content, innerHTML). */
+const escapeHtml = (value: unknown): string =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+/** Maps an Open-Meteo WMO weather code to an emoji. */
+const getWeatherIcon = (code: number, rain: number, isDay = 1): string => {
+  const day = isDay === 1;
+  if (code === 0) return day ? '☀️' : '🌙'; // clear sky
+  if (code === 1) return day ? '🌤️' : '🌙'; // mainly clear
+  if (code === 2) return day ? '⛅' : '☁️'; // partly cloudy
+  if (code === 3) return '☁️'; // overcast
+  if (code === 45 || code === 48) return '🌫️'; // fog / rime fog
+  if (code >= 51 && code <= 57) return '🌦️'; // drizzle (incl. freezing)
+  if (code >= 61 && code <= 67) return '🌧️'; // rain (incl. freezing)
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return '❄️'; // snow
+  if (code >= 80 && code <= 82) return '🌧️'; // rain showers
+  if (code >= 95 && code <= 99) return '⛈️'; // thunderstorm (incl. hail)
+  // Unknown code: fall back on the measured precipitation.
+  return rain > 0 ? '🌧️' : '☁️';
+};
+
+const formatHourString = (isoStr: string): string => {
+  if (!isoStr || !isoStr.includes('T')) return '';
+  const hour = parseInt(isoStr.split('T')[1].split(':')[0], 10);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${hour12} ${ampm}`;
+};
+
+/**
+ * Index of the hourly entry for the CURRENT hour.
+ * Open-Meteo's current.time is usually on a 15-minute step (e.g. "2026-10-12T14:15")
+ * while hourly times are on the hour ("...T14:00"), so we compare "YYYY-MM-DDTHH" only.
+ */
+const findCurrentHourIndex = (hourlyTimes: string[], currentTime: string): number => {
+  if (!hourlyTimes || !currentTime) return 0;
+  const currentHour = currentTime.slice(0, 13);
+  const idx = hourlyTimes.findIndex((t) => t.slice(0, 13) === currentHour);
+  return idx === -1 ? 0 : idx;
+};
+
 export const App: React.FC = () => {
   const mapRef = useRef<HTMLDivElement>(null);
   const [mapInstance, setMapInstance] = useState<google.maps.Map | null>(null);
@@ -36,6 +87,7 @@ export const App: React.FC = () => {
   const [routeDestination, setRouteDestination] = useState<string>('');
   const [routeMode, setRouteMode] = useState<string>('DRIVING');
   const [routeSummary, setRouteSummary] = useState<RouteSummary | null>(null);
+  const [isSatellite, setIsSatellite] = useState<boolean>(false);
 
   // References to Google Libraries and Services
   const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
@@ -52,36 +104,34 @@ export const App: React.FC = () => {
   const currentWeatherDataRef = useRef<any>(null);
   const weatherLayerVisibleRef = useRef<boolean>(true);
 
+  // Stale-request guard (see clearMarkers): the generation counter changes every time
+  // the pins are cleared; the AbortController cancels the in-flight weather request.
+  const markerGenerationRef = useRef<number>(0);
+  const weatherAbortRef = useRef<AbortController | null>(null);
+
   // Helpers
-  const getWeatherIcon = (code: number, rain: number, isDay = 1): string => {
-    if (rain > 0) return '🌧️';
-    if (code >= 95) return '⚡';
-    if (isDay === 1) {
-      if (code === 0) return '☀️';
-      if (code <= 3) return '⛅';
-      return '☁️';
-    } else {
-      if (code === 0) return '🌙';
-      return '☁️';
+  // (getWeatherIcon, formatHourString, findCurrentHourIndex and escapeHtml are now
+  //  plain functions at the top of this file; they do not need component state.)
+
+  // Removes every pin AND invalidates anything still in flight. Each call bumps the
+  // "generation" counter, cancels the pending weather request and returns the new
+  // generation number. Async work (weather fetch, place lookup, reverse geocode)
+  // remembers the generation it started in and throws its result away if the counter
+  // has moved on, i.e. the user clicked / searched / routed again in the meantime.
+  const clearMarkers = (): number => {
+    markerGenerationRef.current += 1;
+    if (weatherAbortRef.current) {
+      weatherAbortRef.current.abort();
+      weatherAbortRef.current = null;
     }
-  };
-
-  const formatHourString = (isoStr: string): string => {
-    if (!isoStr || !isoStr.includes('T')) return '';
-    const hour = parseInt(isoStr.split('T')[1].split(':')[0], 10);
-    const ampm = hour >= 12 ? 'PM' : 'AM';
-    const hour12 = hour % 12 === 0 ? 12 : hour % 12;
-    return `${hour12} ${ampm}`;
-  };
-
-  const clearMarkers = () => {
     activeMarkersRef.current.forEach((m) => (m.map = null));
     activeMarkersRef.current = [];
+    return markerGenerationRef.current;
   };
 
-  const fetchDetailedWeather = async (lat: number, lng: number) => {
+  const fetchDetailedWeather = async (lat: number, lng: number, signal?: AbortSignal) => {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,is_day&hourly=temperature_2m,weather_code,precipitation,is_day&timezone=auto`;
-    const response = await fetch(url);
+    const response = await fetch(url, { signal });
     if (!response.ok) throw new Error('Weather fetch failed');
     return await response.json();
   };
@@ -105,10 +155,10 @@ export const App: React.FC = () => {
     return `
       <div class="place-card-popup">
           <div class="place-card-header">
-              <h3 class="place-card-title">${placeInfo.name}</h3>
-              <a href="${mapsLink}" target="_blank" class="place-card-link-btn" title="Open in Google Maps">↗</a>
+              <h3 class="place-card-title">${escapeHtml(placeInfo.name)}</h3>
+              <a href="${escapeHtml(mapsLink)}" target="_blank" rel="noopener noreferrer" class="place-card-link-btn" title="Open in Google Maps">↗</a>
           </div>
-          ${placeInfo.address ? `<div class="place-card-address">${placeInfo.address}</div>` : ''}
+          ${placeInfo.address ? `<div class="place-card-address">${escapeHtml(placeInfo.address)}</div>` : ''}
           <div class="place-card-acc-row">
               <span class="acc-icon">${accIcon}</span>
               <span>${accText}</span>
@@ -133,11 +183,10 @@ export const App: React.FC = () => {
     }
 
     let hourlyHTML = '';
-    const currentIsoTime = current.time;
-    let startIdx = hourly && hourly.time ? hourly.time.findIndex((t: string) => t >= currentIsoTime) : 0;
-    if (startIdx === -1) startIdx = 0;
+    const startIdx = hourly && hourly.time ? findCurrentHourIndex(hourly.time, current.time) : 0;
+    const hourlyCount = hourly && hourly.time ? hourly.time.length : 0;
 
-    for (let i = startIdx; i < startIdx + 5 && i < hourly.time.length; i++) {
+    for (let i = startIdx; i < startIdx + 5 && i < hourlyCount; i++) {
       const timeLabel = i === startIdx ? 'Now' : formatHourString(hourly.time[i]);
       const hTemp = Math.round(hourly.temperature_2m[i]);
       const hCode = hourly.weather_code[i];
@@ -158,8 +207,8 @@ export const App: React.FC = () => {
       <div class="unified-popup">
           <div class="place-header">
               <div class="back-to-place-btn" onclick="window.showPlaceCard()">← Back to Place Info</div>
-              <h3>📍 Destination: ${placeInfo.name}</h3>
-              ${placeInfo.address ? `<p>${placeInfo.address}</p>` : ''}
+              <h3>📍 Destination: ${escapeHtml(placeInfo.name)}</h3>
+              ${placeInfo.address ? `<p>${escapeHtml(placeInfo.address)}</p>` : ''}
               ${accessibilityHTML}
           </div>
           
@@ -252,9 +301,15 @@ export const App: React.FC = () => {
   };
 
   // Reverse Geocode
-  const handleGeocodeFallback = (latLng: google.maps.LatLng, targetMap: google.maps.Map) => {
+  const handleGeocodeFallback = (
+    latLng: google.maps.LatLng,
+    targetMap: google.maps.Map,
+    generation: number = markerGenerationRef.current
+  ) => {
     if (!geocoderRef.current) return;
     geocoderRef.current.geocode({ location: latLng }, (results, status) => {
+      // A newer click/search/route took over while Google was answering.
+      if (generation !== markerGenerationRef.current) return;
       let placeInfo: PlaceInfo = {
         name: 'Selected Location',
         address: '',
@@ -280,7 +335,7 @@ export const App: React.FC = () => {
         }
       }
 
-      createWeatherMarker(latLng, placeInfo, targetMap, true);
+      createWeatherMarker(latLng, placeInfo, targetMap, true, generation);
     });
   };
 
@@ -289,9 +344,12 @@ export const App: React.FC = () => {
     position: google.maps.LatLng | google.maps.LatLngLiteral,
     placeInfo: PlaceInfo,
     targetMap: google.maps.Map,
-    autoOpen = true
+    autoOpen = true,
+    // Which "generation" of markers this request belongs to (see clearMarkers).
+    generation: number = markerGenerationRef.current
   ) => {
     if (!markerLibRef.current || !infoWindowRef.current) return;
+    if (generation !== markerGenerationRef.current) return; // already superseded
 
     const markerDiv = document.createElement('div');
     markerDiv.className = 'weather-marker';
@@ -308,8 +366,17 @@ export const App: React.FC = () => {
     const lat = typeof position.lat === 'function' ? position.lat() : position.lat;
     const lng = typeof position.lng === 'function' ? position.lng() : position.lng;
 
+    // clearMarkers() aborts this request if the user clicks/searches/routes again.
+    const controller = new AbortController();
+    weatherAbortRef.current = controller;
+
     try {
-      const weatherData = await fetchDetailedWeather(lat, lng);
+      const weatherData = await fetchDetailedWeather(lat, lng, controller.signal);
+
+      // Stale-response guard: the pin was removed while we were waiting, so do not
+      // touch the shared refs or reopen the InfoWindow for it.
+      if (generation !== markerGenerationRef.current) return;
+
       const current = weatherData.current;
       const temp = Math.round(current.temperature_2m);
       const currentIcon = getWeatherIcon(current.weather_code, current.precipitation, current.is_day);
@@ -327,11 +394,15 @@ export const App: React.FC = () => {
         if (infoWindowRef.current) infoWindowRef.current.open(targetMap, marker);
       });
 
-      if (autoOpen) {
+      // Do not pop the card open on a pin that is hidden because the checkbox was
+      // unticked while the weather was still loading.
+      if (autoOpen && weatherLayerVisibleRef.current) {
         window.showPlaceCard();
         infoWindowRef.current.open(targetMap, marker);
       }
-    } catch (err) {
+    } catch (err: any) {
+      // An aborted request or a superseded pin is expected, not an error.
+      if (err?.name === 'AbortError' || generation !== markerGenerationRef.current) return;
       console.error('Weather error:', err);
       markerDiv.innerText = '⚠️ N/A';
     }
@@ -339,6 +410,12 @@ export const App: React.FC = () => {
 
   // Initialize Map
   useEffect(() => {
+    // React StrictMode (development only) runs every effect twice: mount -> cleanup -> mount.
+    // `cancelled` lets the abandoned first run stop before it builds a second map, and
+    // `created` lets the cleanup reach the map that the async code below creates.
+    let cancelled = false;
+    const created: { map?: google.maps.Map } = {};
+
     const loader = new Loader({
       apiKey: GOOGLE_MAPS_API_KEY,
       version: 'weekly',
@@ -347,9 +424,15 @@ export const App: React.FC = () => {
 
     loader.load().then(async () => {
       const { Map, InfoWindow } = (await google.maps.importLibrary('maps')) as google.maps.MapsLibrary;
-      markerLibRef.current = (await google.maps.importLibrary('marker')) as google.maps.MarkerLibrary;
-      placesLibRef.current = (await google.maps.importLibrary('places')) as google.maps.PlacesLibrary;
+      const markerLib = (await google.maps.importLibrary('marker')) as google.maps.MarkerLibrary;
+      const placesLib = (await google.maps.importLibrary('places')) as google.maps.PlacesLibrary;
       await google.maps.importLibrary('routes');
+
+      // The effect may have been cleaned up while the libraries were loading.
+      if (cancelled || !mapRef.current) return;
+
+      markerLibRef.current = markerLib;
+      placesLibRef.current = placesLib;
 
       infoWindowRef.current = new InfoWindow();
       directionsServiceRef.current = new google.maps.DirectionsService();
@@ -362,14 +445,16 @@ export const App: React.FC = () => {
         },
       });
 
-      if (!mapRef.current) return;
-
-      const map = new Map(mapRef.current, {
+      const map = new google.maps.Map(mapRef.current!, {
         center: { lat: -36.8485, lng: 174.7633 },
         zoom: 12,
-        mapId: 'DEMO_MAP_ID',
+        mapId: 'DEMO_MAP_ID', 
+        mapTypeControl: false, // Ensure default is hidden
+        zoomControl: false, // Hide zoom for cleaner look if desired
+        // Add other options as needed
       });
-
+      created.map = map;
+      
       directionsRendererRef.current.setMap(map);
       placesServiceRef.current = new google.maps.places.PlacesService(map);
       geocoderRef.current = new google.maps.Geocoder();
@@ -379,24 +464,44 @@ export const App: React.FC = () => {
       map.addListener('click', async (mapsMouseEvent: any) => {
         if (!weatherLayerVisibleRef.current) return;
         if (infoWindowRef.current) infoWindowRef.current.close();
-        clearMarkers();
+        const generation = clearMarkers();
 
         if (mapsMouseEvent.placeId) {
           mapsMouseEvent.stop();
           const placeInfo = await getPlaceDetails(mapsMouseEvent.placeId);
+          // A newer click/search/route took over while we waited for Google.
+          if (generation !== markerGenerationRef.current) return;
           if (placeInfo) {
-            createWeatherMarker(mapsMouseEvent.latLng, placeInfo, map, true);
+            createWeatherMarker(mapsMouseEvent.latLng, placeInfo, map, true, generation);
           } else {
-            handleGeocodeFallback(mapsMouseEvent.latLng, map);
+            handleGeocodeFallback(mapsMouseEvent.latLng, map, generation);
           }
         } else {
-          handleGeocodeFallback(mapsMouseEvent.latLng, map);
+          handleGeocodeFallback(mapsMouseEvent.latLng, map, generation);
         }
       });
+    }).catch((err) => {
+      console.error('Failed to initialise Google Maps:', err);
     });
+
+    return () => {
+      cancelled = true;
+      if (created.map) google.maps.event.clearInstanceListeners(created.map);
+      clearMarkers();
+      if (infoWindowRef.current) infoWindowRef.current.close();
+      if (directionsRendererRef.current) directionsRendererRef.current.setMap(null);
+    };
   }, []);
 
-  // Control Functions
+  // Toggle function
+  const handleToggleMapType = () => {
+    if (!mapInstance) return;
+
+    const nextType = isSatellite ? 'roadmap' : 'satellite';
+    mapInstance.setMapTypeId(nextType);
+    setIsSatellite(!isSatellite);
+  };
+
   const handleToggleWeather = (e: React.ChangeEvent<HTMLInputElement>) => {
     const isChecked = e.target.checked;
     setShowWeather(isChecked);
@@ -415,6 +520,7 @@ export const App: React.FC = () => {
         searchQuery.trim()
       )}&count=1&language=en&format=json`;
       const res = await fetch(url);
+      if (!res.ok) throw new Error(`Geocoding request failed: ${res.status}`);
       const data = await res.json();
 
       if (!data.results || data.results.length === 0) {
@@ -463,7 +569,7 @@ export const App: React.FC = () => {
           });
 
           if (infoWindowRef.current) infoWindowRef.current.close();
-          clearMarkers();
+          const generation = clearMarkers();
 
           // Green Origin Pin
           if (markerLibRef.current && leg.start_location) {
@@ -479,32 +585,29 @@ export const App: React.FC = () => {
           }
 
           // Destination Pin
-          let destPlaceId: string | null = null;
-          if (response.geocoded_waypoints && response.geocoded_waypoints.length > 1) {
-            destPlaceId = response.geocoded_waypoints[response.geocoded_waypoints.length - 1].place_id || null;
-          }
-
-          if (leg.end_location) {
-            if (destPlaceId) {
-              const placeInfo = await getPlaceDetails(destPlaceId);
-              if (placeInfo) {
-                createWeatherMarker(leg.end_location, placeInfo, mapInstance, true);
-              } else {
-                createWeatherMarker(
-                  leg.end_location,
-                  { name: routeDestination, address: leg.end_address || '', mapsUri: '', accessibility: null },
-                  mapInstance,
-                  true
-                );
-              }
-            } else {
-              createWeatherMarker(
-                leg.end_location,
-                { name: routeDestination, address: leg.end_address || '', mapsUri: '', accessibility: null },
-                mapInstance,
-                true
-              );
+          // Only add the weather pin when "Show Weather Pins" is ticked. Map click and
+          // search already behave this way; the route used to ignore the checkbox.
+          if (leg.end_location && weatherLayerVisibleRef.current) {
+            let destPlaceId: string | null = null;
+            if (response.geocoded_waypoints && response.geocoded_waypoints.length > 1) {
+              destPlaceId = response.geocoded_waypoints[response.geocoded_waypoints.length - 1].place_id || null;
             }
+
+            const fallbackInfo: PlaceInfo = {
+              name: routeDestination,
+              address: leg.end_address || '',
+              mapsUri: '',
+              accessibility: null,
+            };
+
+            let destInfo: PlaceInfo | null = null;
+            if (destPlaceId) {
+              destInfo = await getPlaceDetails(destPlaceId);
+              // A newer click/search/route may have taken over while we waited for Google.
+              if (generation !== markerGenerationRef.current) return;
+            }
+
+            createWeatherMarker(leg.end_location, destInfo || fallbackInfo, mapInstance, true, generation);
           }
         } else {
           setRouteSummary(null);
@@ -528,6 +631,27 @@ export const App: React.FC = () => {
   return (
     <div>
       <div id="map-controls">
+        {/* Unique Map Type Toggle Header */}
+        <div className="control-section map-toggle-header">
+          <div className="custom-map-toggle-wrapper">
+            <button
+              type="button"
+              onClick={handleToggleMapType}
+              className={`pill-toggle ${isSatellite ? 'active-satellite' : 'active-standard'}`}
+              aria-label="Toggle Map View"
+            >
+              <div className="toggle-option standard">
+                <span>🗺️ Standard</span>
+              </div>
+              <div className="toggle-option satellite">
+                <span>🛰️ Satellite</span>
+              </div>
+              <div className="pill-slider" />
+            </button>
+          </div>
+        </div>
+
+        {/* Section 1: Explore Location */}
         <div className="control-section">
           <h3>Explore Location</h3>
           <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
@@ -549,6 +673,7 @@ export const App: React.FC = () => {
           </div>
         </div>
 
+        {/* Section 2: Get Directions */}
         <div className="control-section">
           <h3>Get Directions</h3>
           <div className="input-group">
@@ -591,7 +716,6 @@ export const App: React.FC = () => {
           )}
         </div>
       </div>
-
       <div id="map" ref={mapRef} />
     </div>
   );
