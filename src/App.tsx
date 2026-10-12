@@ -30,6 +30,10 @@ declare global {
 // instead of being re-created on every render.
 // ---------------------------------------------------------------------------
 
+/** True on phone-sized screens (matches the CSS breakpoint). */
+const isPhone = (): boolean =>
+  typeof window !== 'undefined' && window.matchMedia('(max-width: 600px)').matches;
+
 /** Escapes text before it is placed inside an HTML string (InfoWindow content, innerHTML). */
 const escapeHtml = (value: unknown): string =>
   String(value ?? '')
@@ -88,6 +92,11 @@ export const App: React.FC = () => {
   const [routeMode, setRouteMode] = useState<string>('DRIVING');
   const [routeSummary, setRouteSummary] = useState<RouteSummary | null>(null);
   const [isSatellite, setIsSatellite] = useState<boolean>(false);
+  // Collapsible controls panel: collapsed by default on phones so the map stays visible,
+  // open by default on desktop. The user can toggle it on both.
+  const [panelOpen, setPanelOpen] = useState<boolean>(() => !isPhone());
+  // Auto-fold after a tap/search/route, but only on phones (on desktop the panel stays as you left it).
+  const foldPanelOnPhone = () => { if (isPhone()) setPanelOpen(false); };
 
   // References to Google Libraries and Services
   const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
@@ -434,7 +443,8 @@ export const App: React.FC = () => {
       markerLibRef.current = markerLib;
       placesLibRef.current = placesLib;
 
-      infoWindowRef.current = new InfoWindow();
+      // maxWidth is a hard cap (px) on the card, whatever its content or the map size.
+      infoWindowRef.current = new InfoWindow({ maxWidth: 320 });
       directionsServiceRef.current = new google.maps.DirectionsService();
       directionsRendererRef.current = new google.maps.DirectionsRenderer({
         suppressMarkers: true,
@@ -462,21 +472,24 @@ export const App: React.FC = () => {
 
       // Map Click Event Listener
       map.addListener('click', async (mapsMouseEvent: any) => {
+        foldPanelOnPhone(); // tapping the map folds the controls away (phones)
         if (!weatherLayerVisibleRef.current) return;
         if (infoWindowRef.current) infoWindowRef.current.close();
         const generation = clearMarkers();
 
-        if (mapsMouseEvent.placeId) {
-          mapsMouseEvent.stop();
-          const placeInfo = await getPlaceDetails(mapsMouseEvent.placeId);
-          // A newer click/search/route took over while we waited for Google.
-          if (generation !== markerGenerationRef.current) return;
-          if (placeInfo) {
-            createWeatherMarker(mapsMouseEvent.latLng, placeInfo, map, true, generation);
-          } else {
-            handleGeocodeFallback(mapsMouseEvent.latLng, map, generation);
-          }
+        // Clicked empty map (not a named place): the old pin is already closed above,
+        // and we deliberately do not drop a new one.
+        if (!mapsMouseEvent.placeId) return;
+
+        // Clicked a named place (shop, park, ...): move the pin there.
+        mapsMouseEvent.stop();
+        const placeInfo = await getPlaceDetails(mapsMouseEvent.placeId);
+        // A newer click/search/route took over while we waited for Google.
+        if (generation !== markerGenerationRef.current) return;
+        if (placeInfo) {
+          createWeatherMarker(mapsMouseEvent.latLng, placeInfo, map, true, generation);
         } else {
+          // Place details failed: fall back to a reverse-geocoded pin at the clicked spot.
           handleGeocodeFallback(mapsMouseEvent.latLng, map, generation);
         }
       });
@@ -533,6 +546,7 @@ export const App: React.FC = () => {
 
       mapInstance.panTo(pos);
       mapInstance.setZoom(12);
+      foldPanelOnPhone();
 
       if (infoWindowRef.current) infoWindowRef.current.close();
       clearMarkers();
@@ -567,6 +581,7 @@ export const App: React.FC = () => {
             duration: leg.duration?.text || '',
             distance: leg.distance?.text || '',
           });
+          foldPanelOnPhone();
 
           if (infoWindowRef.current) infoWindowRef.current.close();
           const generation = clearMarkers();
@@ -630,90 +645,119 @@ export const App: React.FC = () => {
 
   return (
     <div>
-      <div id="map-controls">
-        {/* Unique Map Type Toggle Header */}
-        <div className="control-section map-toggle-header">
-          <div className="custom-map-toggle-wrapper">
-            <button
-              type="button"
-              onClick={handleToggleMapType}
-              className={`pill-toggle ${isSatellite ? 'active-satellite' : 'active-standard'}`}
-              aria-label="Toggle Map View"
-            >
-              <div className="toggle-option standard">
-                <span>🗺️ Standard</span>
+      <div id="map-controls" className={panelOpen ? 'panel-open' : 'panel-collapsed'}>
+        {/* Mobile only: tap to expand/collapse the controls (hidden on desktop by CSS) */}
+        <button
+          type="button"
+          className="panel-toggle"
+          onClick={() => setPanelOpen((open) => !open)}
+          aria-expanded={panelOpen}
+          aria-controls="map-controls-body"
+        >
+          <svg className="panel-toggle-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M4 7h9M17 7h3M4 17h3M11 17h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+            <circle cx="15" cy="7" r="2.5" fill="none" stroke="currentColor" strokeWidth="2" />
+            <circle cx="9" cy="17" r="2.5" fill="none" stroke="currentColor" strokeWidth="2" />
+          </svg>
+          <span className="panel-toggle-label">
+            {routeSummary
+              ? `${routeSummary.modeIcon} · ${routeSummary.duration} · ${routeSummary.distance}`
+              : 'Map controls'}
+          </span>
+          <span className="panel-chevron" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16">
+              <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+            </svg>
+          </span>
+        </button>
+
+        <div id="map-controls-body" className="panel-body">
+          <div className="panel-body-inner">
+            {/* Unique Map Type Toggle Header */}
+            <div className="control-section map-toggle-header">
+              <div className="custom-map-toggle-wrapper">
+                <button
+                  type="button"
+                  onClick={handleToggleMapType}
+                  className={`pill-toggle ${isSatellite ? 'active-satellite' : 'active-standard'}`}
+                  aria-label="Toggle Map View"
+                >
+                  <div className="toggle-option standard">
+                    <span>🗺️ Standard</span>
+                  </div>
+                  <div className="toggle-option satellite">
+                    <span>🛰️ Satellite</span>
+                  </div>
+                  <div className="pill-slider" />
+                </button>
               </div>
-              <div className="toggle-option satellite">
-                <span>🛰️ Satellite</span>
-              </div>
-              <div className="pill-slider" />
-            </button>
-          </div>
-        </div>
-
-        {/* Section 1: Explore Location */}
-        <div className="control-section">
-          <h3>Explore Location</h3>
-          <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
-            <input type="checkbox" checked={showWeather} onChange={handleToggleWeather} />
-            <span>Show Weather Pins</span>
-          </label>
-
-          <div className="input-group">
-            <input
-              type="text"
-              placeholder="Search city or place..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSearchLocation()}
-            />
-            <button className="btn-primary" onClick={handleSearchLocation}>
-              Search Location
-            </button>
-          </div>
-        </div>
-
-        {/* Section 2: Get Directions */}
-        <div className="control-section">
-          <h3>Get Directions</h3>
-          <div className="input-group">
-            <input
-              type="text"
-              placeholder="Origin (e.g. Auckland Central)"
-              value={routeOrigin}
-              onChange={(e) => setRouteOrigin(e.target.value)}
-            />
-            <input
-              type="text"
-              placeholder="Destination (e.g. Westfield Albany)"
-              value={routeDestination}
-              onChange={(e) => setRouteDestination(e.target.value)}
-            />
-
-            <select value={routeMode} onChange={(e) => setRouteMode(e.target.value)}>
-              <option value="DRIVING">🚗 Driving (Car)</option>
-              <option value="TRANSIT">🚆 Public Transport</option>
-            </select>
-          </div>
-
-          <div className="btn-row">
-            <button className="btn-primary" onClick={calculateAndDisplayRoute}>
-              Get Route
-            </button>
-            <button className="btn-secondary" onClick={clearRoute}>
-              Clear
-            </button>
-          </div>
-
-          {routeSummary && (
-            <div id="route-info">
-              <b>{routeSummary.modeIcon} Route Found:</b>
-              <br />
-              ⏱️ <b>Time:</b> {routeSummary.duration}
-              <br />
-              📏 <b>Distance:</b> {routeSummary.distance}
             </div>
-          )}
+
+            {/* Section 1: Explore Location */}
+            <div className="control-section">
+              <h3>Explore Location</h3>
+              <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                <input type="checkbox" checked={showWeather} onChange={handleToggleWeather} />
+                <span>Show Weather Pins</span>
+              </label>
+
+              <div className="input-group">
+                <input
+                  type="text"
+                  placeholder="Search city or place..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSearchLocation()}
+                />
+                <button className="btn-primary" onClick={handleSearchLocation}>
+                  Search Location
+                </button>
+              </div>
+            </div>
+
+            {/* Section 2: Get Directions */}
+            <div className="control-section">
+              <h3>Get Directions</h3>
+              <div className="input-group">
+                <input
+                  type="text"
+                  placeholder="Origin (e.g. Auckland Central)"
+                  value={routeOrigin}
+                  onChange={(e) => setRouteOrigin(e.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="Destination (e.g. Westfield Albany)"
+                  value={routeDestination}
+                  onChange={(e) => setRouteDestination(e.target.value)}
+                />
+
+                <select value={routeMode} onChange={(e) => setRouteMode(e.target.value)}>
+                  <option value="DRIVING">🚗 Driving (Car)</option>
+                  <option value="TRANSIT">🚆 Public Transport</option>
+                </select>
+              </div>
+
+              <div className="btn-row">
+                <button className="btn-primary" onClick={calculateAndDisplayRoute}>
+                  Get Route
+                </button>
+                <button className="btn-secondary" onClick={clearRoute}>
+                  Clear
+                </button>
+              </div>
+
+              {routeSummary && (
+                <div id="route-info">
+                  <b>{routeSummary.modeIcon} Route Found:</b>
+                  <br />
+                  ⏱️ <b>Time:</b> {routeSummary.duration}
+                  <br />
+                  📏 <b>Distance:</b> {routeSummary.distance}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
       <div id="map" ref={mapRef} />

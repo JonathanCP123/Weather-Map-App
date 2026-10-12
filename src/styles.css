@@ -434,3 +434,201 @@ body, html, #root {
     font-size: 11px;
   }
 }
+.section-description {
+  margin: 0 0 8px 0;
+  font-size: 11px;
+  color: #5f6368;
+  line-height: 1.3;
+}
+
+/* --- Place / weather cards: they can never outgrow the screen ------------- */
+.place-card-popup,
+.unified-popup {
+  box-sizing: border-box;
+  max-width: min(320px, calc(100vw - 96px));
+  max-height: 40vh;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* --- The panel: header row + body ----------------------------------------- */
+#map-controls {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Header button: looks like part of the card, not a browser button */
+.panel-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  flex-shrink: 0;
+  padding: 12px 14px 12px 16px;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  color: #202124;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.panel-toggle-icon {
+  flex-shrink: 0;
+  color: #1a73e8;
+}
+
+.panel-toggle-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Round chevron chip, same blue family as the rest of the UI */
+.panel-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #e8f0fe;
+  color: #1a73e8;
+  transition: background-color 0.2s ease, transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.panel-toggle:hover .panel-chevron {
+  background: #d2e3fc;
+}
+
+.panel-toggle:active .panel-chevron {
+  transform: scale(0.92);
+}
+
+.panel-toggle:focus-visible {
+  outline: 2px solid #1a73e8;
+  outline-offset: -3px;
+  border-radius: 16px;
+}
+
+/* Desktop: panel is at the top, so chevron points up when open (fold upward) */
+.panel-chevron svg {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#map-controls.panel-open .panel-chevron svg {
+  transform: rotate(180deg);
+}
+
+/* Body: animates open/closed (grid row 1fr <-> 0fr) */
+.panel-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  flex: 1 1 auto;
+  min-height: 0;
+  transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+}
+
+.panel-body-inner {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 20px 16px;
+  border-top: 1px solid #e8eaed;
+  padding-top: 12px;
+}
+
+#map-controls.panel-collapsed .panel-body {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+#map-controls.panel-collapsed .panel-body-inner {
+  overflow: hidden;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-color: transparent;
+}
+
+/* Collapsed desktop panel: shrink to a compact pill */
+@media screen and (min-width: 601px) {
+  #map-controls.panel-collapsed {
+    width: 210px;
+    border-radius: 24px;
+  }
+}
+
+/* --- Phones: bottom sheet ------------------------------------------------- */
+@media screen and (max-width: 600px) {
+  .place-card-popup { width: 240px; }
+  .unified-popup    { width: 260px; }
+
+  #map-controls {
+    max-height: 42vh;
+  }
+
+  /* little drag-handle look on top of the header */
+  .panel-toggle {
+    padding: 20px 14px 10px 16px;
+  }
+  .panel-toggle::before {
+    content: '';
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: #c4c7c5;
+  }
+
+  /* bottom sheet: chevron points down when open (fold downward) */
+  #map-controls.panel-open .panel-chevron svg {
+    transform: none;
+  }
+  #map-controls.panel-collapsed .panel-chevron svg {
+    transform: rotate(180deg);
+  }
+
+  .panel-body-inner {
+    padding: 10px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  #map-controls.panel-collapsed .panel-toggle {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Tighter spacing inside the open sheet */
+  .control-section            { padding-bottom: 8px; margin-bottom: 8px; }
+  #map-controls h3            { margin-bottom: 4px; }
+  .input-group                { gap: 4px; margin-top: 6px; }
+  .input-group input,
+  .input-group select         { padding: 7px 9px; }
+  .btn-row                    { margin-top: 6px; }
+  .custom-map-toggle-wrapper  { margin: 0 0 4px 0; }
+  .pill-toggle                { height: 32px; }
+  #route-info                 { margin-top: 8px; padding: 8px; }
+}
+
+/* iPhone Safari zooms the whole page when you tap an input smaller than 16px */
+@supports (-webkit-touch-callout: none) {
+  @media screen and (max-width: 600px) {
+    .input-group input,
+    .input-group select { font-size: 16px; }
+  }
+}
+
+/* Respect "reduce motion" */
+@media (prefers-reduced-motion: reduce) {
+  .panel-body,
+  .panel-chevron,
+  .panel-chevron svg { transition: none; }
+}
