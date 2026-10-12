@@ -34,6 +34,153 @@ declare global {
 const isPhone = (): boolean =>
   typeof window !== 'undefined' && window.matchMedia('(max-width: 600px)').matches;
 
+// ---------------------------------------------------------------------------
+// Location helpers
+// ---------------------------------------------------------------------------
+type LatLngLike = { lat: number; lng: number };
+
+const DEFAULT_CENTER: LatLngLike = { lat: -36.8485, lng: 174.7633 }; // Auckland: used when nothing better is known
+const START_ZOOM = 12;
+const MY_LOCATION_LABEL = 'My location';
+
+/**
+ * Asks the browser for the precise position. This triggers the browser's permission
+ * prompt, so only call it from a user tap (the "locate me" buttons).
+ * Rejects with a GeolocationPositionError-like object ({ code: 1 | 2 | 3 }), or { code: 0 }
+ * when the browser has no geolocation support.
+ */
+const requestPosition = (timeoutMs = 10000): Promise<LatLngLike> =>
+  new Promise((resolve, reject) => {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+      reject({ code: 0 });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) => reject(err),
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 60000 }
+    );
+  });
+
+const geolocationErrorMessage = (err: any): string => {
+  switch (err && err.code) {
+    case 0:
+      return 'Your browser does not support location.';
+    case 1:
+      return 'Location is blocked. Allow it for this site in your browser settings, then try again.';
+    case 2:
+      return 'Your location is unavailable right now. Try again in a moment.';
+    case 3:
+      return 'Finding your location took too long. Try again.';
+    default:
+      return 'Could not get your location.';
+  }
+};
+
+const APPROX_CACHE_KEY = 'approxLocation';
+const APPROX_CACHE_MS = 12 * 60 * 60 * 1000; // remember the rough location for 12 hours
+
+const readCachedApprox = (): LatLngLike | null => {
+  try {
+    const raw = localStorage.getItem(APPROX_CACHE_KEY);
+    if (!raw) return null;
+    const { lat, lng, at } = JSON.parse(raw);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && Date.now() - at < APPROX_CACHE_MS) {
+      return { lat, lng };
+    }
+  } catch {
+    /* storage blocked or corrupt: ignore */
+  }
+  return null;
+};
+
+const writeCachedApprox = (pos: LatLngLike) => {
+  try {
+    localStorage.setItem(APPROX_CACHE_KEY, JSON.stringify({ ...pos, at: Date.now() }));
+  } catch {
+    /* storage blocked: ignore */
+  }
+};
+
+/**
+ * Rough, city-level position from the visitor's IP address. No permission prompt.
+ * The free ipwho.is endpoint allows 1,000 requests/day per website (shared by all
+ * visitors), which is why the result is cached. Returns null on any failure.
+ */
+const fetchApproxLocation = async (timeoutMs: number): Promise<LatLngLike | null> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch('https://ipwho.is/', { signal: controller.signal });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data && data.success !== false && Number.isFinite(data.latitude) && Number.isFinite(data.longitude)) {
+      return { lat: data.latitude, lng: data.longitude };
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
+ * Where the map should open, best source first:
+ *  1. the precise position, but ONLY if the user has already allowed location for this
+ *     site (so there is never a surprise permission prompt on page load);
+ *  2. a recent rough position remembered from an earlier visit;
+ *  3. a fresh rough (city-level) position from the IP address;
+ *  4. Auckland.
+ */
+const getStartingCenter = async (): Promise<LatLngLike> => {
+  try {
+    const perm = await (navigator as any).permissions?.query({ name: 'geolocation' });
+    if (perm && perm.state === 'granted') {
+      try {
+        return await requestPosition(3000);
+      } catch {
+        /* fall through to the rough location */
+      }
+    }
+  } catch {
+    /* Permissions API not available: fall through */
+  }
+  const cached = readCachedApprox();
+  if (cached) return cached;
+  const approx = await fetchApproxLocation(2500);
+  if (approx) {
+    writeCachedApprox(approx);
+    return approx;
+  }
+  return DEFAULT_CENTER;
+};
+
+/** Resolves with `fallback` if `promise` is slow or fails, so the map is never held up. */
+const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      }
+    );
+  });
+
+/** Crosshair icon used by both "locate me" buttons. */
+const LocateIcon: React.FC<{ size?: number }> = ({ size = 22 }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
+    <circle cx="12" cy="12" r="3.2" fill="currentColor" />
+    <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" strokeWidth="2" />
+    <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+  </svg>
+);
+
 /** Escapes text before it is placed inside an HTML string (InfoWindow content, innerHTML). */
 const escapeHtml = (value: unknown): string =>
   String(value ?? '')
@@ -97,6 +244,14 @@ export const App: React.FC = () => {
   const [panelOpen, setPanelOpen] = useState<boolean>(() => !isPhone());
   // Auto-fold after a tap/search/route, but only on phones (on desktop the panel stays as you left it).
   const foldPanelOnPhone = () => { if (isPhone()) setPanelOpen(false); };
+
+  // "Locate me" state
+  const [locating, setLocating] = useState<boolean>(false); // map button busy
+  const [originLocating, setOriginLocating] = useState<boolean>(false); // origin-field button busy
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | undefined>(undefined);
+  // Exact coordinates behind the "My location" text in the Origin field
+  const originCoordsRef = useRef<LatLngLike | null>(null);
 
   // References to Google Libraries and Services
   const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
@@ -423,6 +578,10 @@ export const App: React.FC = () => {
     // `cancelled` lets the abandoned first run stop before it builds a second map, and
     // `created` lets the cleanup reach the map that the async code below creates.
     let cancelled = false;
+
+    // Work out where to open the map WHILE the Google libraries load, so it adds no waiting.
+    // Never rejects and gives up after 3.5s, falling back to Auckland.
+    const startCenterPromise = withTimeout(getStartingCenter(), 3500, DEFAULT_CENTER);
     const created: { map?: google.maps.Map } = {};
 
     const loader = new Loader({
@@ -436,6 +595,8 @@ export const App: React.FC = () => {
       const markerLib = (await google.maps.importLibrary('marker')) as google.maps.MarkerLibrary;
       const placesLib = (await google.maps.importLibrary('places')) as google.maps.PlacesLibrary;
       await google.maps.importLibrary('routes');
+
+      const startCenter = await startCenterPromise;
 
       // The effect may have been cleaned up while the libraries were loading.
       if (cancelled || !mapRef.current) return;
@@ -456,8 +617,8 @@ export const App: React.FC = () => {
       });
 
       const map = new google.maps.Map(mapRef.current!, {
-        center: { lat: -36.8485, lng: 174.7633 },
-        zoom: 12,
+        center: startCenter,
+        zoom: START_ZOOM,
         mapId: 'DEMO_MAP_ID', 
         mapTypeControl: false, // Ensure default is hidden
         zoomControl: false, // Hide zoom for cleaner look if desired
@@ -567,7 +728,8 @@ export const App: React.FC = () => {
 
     directionsServiceRef.current.route(
       {
-        origin: routeOrigin,
+        origin:
+          originCoordsRef.current && routeOrigin === MY_LOCATION_LABEL ? originCoordsRef.current : routeOrigin,
         destination: routeDestination,
         travelMode: google.maps.TravelMode[routeMode as keyof typeof google.maps.TravelMode],
       },
@@ -638,9 +800,80 @@ export const App: React.FC = () => {
     }
     setRouteSummary(null);
     setRouteOrigin('');
+    originCoordsRef.current = null;
     setRouteDestination('');
     if (infoWindowRef.current) infoWindowRef.current.close();
     clearMarkers();
+  };
+
+  // ---- Locate me ---------------------------------------------------------
+  useEffect(() => () => window.clearTimeout(toastTimerRef.current), []);
+
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToastMessage(null), 5000);
+  };
+
+  // Street address for a position, or '' if Google cannot find one.
+  const reverseGeocodeAddress = (pos: LatLngLike): Promise<string> =>
+    new Promise((resolve) => {
+      if (!geocoderRef.current) return resolve('');
+      geocoderRef.current.geocode({ location: pos }, (results, status) => {
+        resolve(status === 'OK' && results && results[0] ? results[0].formatted_address : '');
+      });
+    });
+
+  // Map button: centre on the user and show the weather where they are.
+  const handleLocateMe = async () => {
+    if (!mapInstance || locating) return;
+    setLocating(true);
+    setToastMessage(null);
+    try {
+      const pos = await requestPosition();
+      mapInstance.panTo(pos);
+      mapInstance.setZoom(15);
+      foldPanelOnPhone();
+      if (infoWindowRef.current) infoWindowRef.current.close();
+      const generation = clearMarkers();
+
+      if (weatherLayerVisibleRef.current) {
+        const address = await reverseGeocodeAddress(pos);
+        // A newer click/search/route took over while Google was answering.
+        if (generation !== markerGenerationRef.current) return;
+        createWeatherMarker(
+          pos,
+          {
+            name: MY_LOCATION_LABEL,
+            address,
+            mapsUri: `https://www.google.com/maps/search/?api=1&query=${pos.lat},${pos.lng}`,
+            accessibility: null,
+          },
+          mapInstance,
+          true,
+          generation
+        );
+      }
+    } catch (err) {
+      showToast(geolocationErrorMessage(err));
+    } finally {
+      setLocating(false);
+    }
+  };
+
+  // Origin field button: fill the origin with the user's current position.
+  const handleUseMyLocationAsOrigin = async () => {
+    if (originLocating) return;
+    setOriginLocating(true);
+    try {
+      const pos = await requestPosition();
+      originCoordsRef.current = pos;
+      setRouteOrigin(MY_LOCATION_LABEL);
+    } catch (err) {
+      showToast(geolocationErrorMessage(err));
+    } finally {
+      setOriginLocating(false);
+    }
   };
 
   return (
@@ -719,12 +952,28 @@ export const App: React.FC = () => {
             <div className="control-section">
               <h3>Get Directions</h3>
               <div className="input-group">
-                <input
-                  type="text"
-                  placeholder="Origin (e.g. Auckland Central)"
-                  value={routeOrigin}
-                  onChange={(e) => setRouteOrigin(e.target.value)}
-                />
+                <div className="input-with-action">
+                  <input
+                    type="text"
+                    placeholder="Origin (e.g. Auckland Central)"
+                    aria-label="Route origin"
+                    value={routeOrigin}
+                    onChange={(e) => {
+                      setRouteOrigin(e.target.value);
+                      originCoordsRef.current = null; // typed text replaces any saved "My location"
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={`origin-locate-btn${originLocating ? ' locating' : ''}`}
+                    onClick={handleUseMyLocationAsOrigin}
+                    disabled={originLocating}
+                    aria-label="Use my location as the origin"
+                    title="Use my location"
+                  >
+                    <LocateIcon size={18} />
+                  </button>
+                </div>
                 <input
                   type="text"
                   placeholder="Destination (e.g. Westfield Albany)"
@@ -761,6 +1010,24 @@ export const App: React.FC = () => {
         </div>
       </div>
       <div id="map" ref={mapRef} />
+
+      {/* Round button under the Google fullscreen control: centre the map on me */}
+      <button
+        type="button"
+        className={`locate-btn${locating ? ' locating' : ''}`}
+        onClick={handleLocateMe}
+        disabled={!mapInstance || locating}
+        aria-label="Show my location"
+        title="Show my location"
+      >
+        <LocateIcon />
+      </button>
+
+      {toastMessage && (
+        <div className="map-toast" role="alert">
+          {toastMessage}
+        </div>
+      )}
     </div>
   );
 };
