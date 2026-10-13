@@ -18,8 +18,18 @@ import { SearchSection } from './components/SearchSection';
 import { DirectionsSection } from './components/DirectionsSection';
 import { LocateIcon } from './components/LocateIcon';
 
-/** Everything about the place pin on the map. */
+/**
+ * There are two place-pin "slots":
+ *  - 'main':    the pin from a map click / search / locate-me, or the route destination;
+ *  - 'explore': only while a route is shown, the place clicked on the map, so exploring
+ *               never removes the route's destination pin.
+ */
+type PinSlot = 'main' | 'explore';
+const PIN_SLOTS: PinSlot[] = ['main', 'explore'];
+
+/** Everything about one place pin on the map. */
 interface PlacePin {
+  slot: PinSlot;
   marker: google.maps.marker.AdvancedMarkerElement;
   label: HTMLDivElement; // the pin's content element (temperature or place name)
   map: google.maps.Map;
@@ -64,54 +74,70 @@ export const App: React.FC = () => {
   const placesLibRef = useRef<google.maps.PlacesLibrary | null>(null);
   const markerLibRef = useRef<google.maps.MarkerLibrary | null>(null);
 
-  // The pins on the map: at most one place pin (click / search / locate / route
-  // destination) and, after a route, the green "Start" pin.
-  const placePinRef = useRef<PlacePin | null>(null);
+  // The pins on the map: one place pin per slot (see PinSlot) and, after a route,
+  // the green "Start" pin.
+  const pinsRef = useRef<Record<PinSlot, PlacePin | null>>({ main: null, explore: null });
   const originMarkerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
+  // True while a route is shown: map clicks then use the 'explore' slot.
+  const routeActiveRef = useRef<boolean>(false);
   // "Show Weather" checkbox, as a ref so map listeners always read the latest value
   const weatherOnRef = useRef<boolean>(true);
 
-  // Which card is showing and the zoom-based size state
+  // Which pin's card is in the InfoWindow (only one card is open at a time),
+  // which card it is, and the zoom-based size state
+  const activePinRef = useRef<PlacePin | null>(null);
   const currentCardRef = useRef<'place' | 'weather'>('place');
   const cardBandRef = useRef<CardBand>('full');
   const cardHiddenByZoomRef = useRef<boolean>(false); // true = we hid the card because of zoom, so bring it back later
   const infoOpenRef = useRef<boolean>(false); // is the InfoWindow currently open?
 
-  // Stale-request guard (see clearMarkers): the generation counter changes every time
-  // the pins are cleared; the AbortController cancels the in-flight weather request.
-  const markerGenerationRef = useRef<number>(0);
-  const weatherAbortRef = useRef<AbortController | null>(null);
+  // Stale-request guard (see clearSlot): each slot has its own generation counter, which
+  // changes every time that slot's pin is cleared, and its own in-flight weather request.
+  const generationRef = useRef<Record<PinSlot, number>>({ main: 0, explore: 0 });
+  const weatherAbortRef = useRef<Record<PinSlot, AbortController | null>>({ main: null, explore: null });
 
-  // Removes every pin AND invalidates anything still in flight. Each call bumps the
-  // "generation" counter, cancels the pending weather request and returns the new
-  // generation number. Async work (weather fetch, place lookup, reverse geocode)
-  // remembers the generation it started in and throws its result away if the counter
-  // has moved on, i.e. the user clicked / searched / routed again in the meantime.
-  const clearMarkers = (): number => {
-    markerGenerationRef.current += 1;
-    cardHiddenByZoomRef.current = false;
-    cancelWeatherRequest();
-    if (placePinRef.current) placePinRef.current.marker.map = null;
-    placePinRef.current = null;
+  const cancelWeatherRequest = (slot: PinSlot) => {
+    weatherAbortRef.current[slot]?.abort();
+    weatherAbortRef.current[slot] = null;
+  };
+
+  // Removes one slot's pin AND invalidates anything still in flight for it. Each call bumps
+  // the slot's "generation" counter, cancels its pending weather request and returns the new
+  // generation number. Async work (weather fetch, place lookup, reverse geocode) remembers
+  // the generation it started in and throws its result away if the counter has moved on,
+  // i.e. the user clicked / searched / routed again in the meantime.
+  const clearSlot = (slot: PinSlot): number => {
+    generationRef.current[slot] += 1;
+    cancelWeatherRequest(slot);
+    const pin = pinsRef.current[slot];
+    if (pin) {
+      pin.marker.map = null;
+      if (activePinRef.current === pin) {
+        activePinRef.current = null;
+        cardHiddenByZoomRef.current = false;
+      }
+    }
+    pinsRef.current[slot] = null;
+    return generationRef.current[slot];
+  };
+
+  // Removes every pin (both place pins and the Start pin). Returns the new 'main' generation.
+  const clearAllPins = (): number => {
+    PIN_SLOTS.forEach(clearSlot);
     if (originMarkerRef.current) originMarkerRef.current.map = null;
     originMarkerRef.current = null;
-    return markerGenerationRef.current;
+    return generationRef.current.main;
   };
 
-  const cancelWeatherRequest = () => {
-    if (weatherAbortRef.current) {
-      weatherAbortRef.current.abort();
-      weatherAbortRef.current = null;
-    }
-  };
+  const isStale = (slot: PinSlot, generation: number) => generation !== generationRef.current[slot];
 
   // The pin's weather, or null if weather is switched off or not loaded.
   const visibleWeather = (pin: PlacePin): WeatherResponse | null => (weatherOnRef.current ? pin.weather : null);
 
-  // Puts the right card for the current pin into the InfoWindow: the weather card if it was
+  // Puts the right card for the active pin into the InfoWindow: the weather card if it was
   // asked for and weather is available, otherwise the place card.
   const renderCard = () => {
-    const pin = placePinRef.current;
+    const pin = activePinRef.current;
     const iw = infoWindowRef.current;
     if (!pin || !iw) return;
     const weather = visibleWeather(pin);
@@ -143,19 +169,21 @@ export const App: React.FC = () => {
   const handleGeocodeFallback = (
     latLng: google.maps.LatLng,
     targetMap: google.maps.Map,
-    generation: number = markerGenerationRef.current
+    slot: PinSlot,
+    generation: number
   ) => {
     if (!geocoderRef.current) return;
     geocoderRef.current.geocode({ location: latLng }, (results, status) => {
       // A newer click/search/route took over while Google was answering.
-      if (generation !== markerGenerationRef.current) return;
-      createPlacePin(latLng, placeInfoFromGeocode(latLng, results, status), targetMap, generation);
+      if (isStale(slot, generation)) return;
+      createPlacePin(slot, latLng, placeInfoFromGeocode(latLng, results, status), targetMap, generation);
     });
   };
 
-  // Opens the place card on the pin, or, if zoomed too far out for a card, remembers to
-  // show it when the user zooms back in.
+  // Opens the place card on the pin (closing any other pin's card), or, if zoomed too far
+  // out for a card, remembers to show it when the user zooms back in.
   const openPlaceCard = (pin: PlacePin) => {
+    activePinRef.current = pin;
     currentCardRef.current = 'place';
     if (cardBandRef.current === 'hidden') {
       cardHiddenByZoomRef.current = true;
@@ -165,53 +193,62 @@ export const App: React.FC = () => {
     infoWindowRef.current?.open(pin.map, pin.marker);
   };
 
+  // Opens a pin's card by itself (when its weather arrives), unless the user is already
+  // reading another pin's card, e.g. they clicked a cafe while the route destination loaded.
+  const autoOpenPlaceCard = (pin: PlacePin) => {
+    const other = activePinRef.current;
+    if (infoOpenRef.current && other && other !== pin) return;
+    openPlaceCard(pin);
+  };
+
   // Fetches the weather for the pin and shows it on the pin (and on the card if open).
   // `openCardWhenDone`: open the place card once the weather is in (a brand-new pin).
   const loadPinWeather = async (pin: PlacePin, generation: number, openCardWhenDone: boolean) => {
     pin.label.innerText = '⏳ Loading...';
 
-    // clearMarkers() (new click/search/route) or unticking "Show Weather" aborts this request.
-    cancelWeatherRequest();
+    // clearSlot() (new click/search/route) or unticking "Show Weather" aborts this request.
+    cancelWeatherRequest(pin.slot);
     const controller = new AbortController();
-    weatherAbortRef.current = controller;
+    weatherAbortRef.current[pin.slot] = controller;
 
     try {
       const weather = await fetchDetailedWeather(pin.lat, pin.lng, controller.signal);
 
       // Stale-response guard: the pin was removed while we were waiting, so do not
       // touch it or the InfoWindow.
-      if (generation !== markerGenerationRef.current) return;
+      if (isStale(pin.slot, generation)) return;
 
       pin.weather = weather;
       // visibleWeather: if weather was switched off just as this arrived, keep the name label.
       pin.label.innerHTML = pinLabelHTML(pin.placeInfo, visibleWeather(pin));
-      if (openCardWhenDone) openPlaceCard(pin);
-      else if (infoOpenRef.current) renderCard(); // card already open: add the weather button
+      if (openCardWhenDone) autoOpenPlaceCard(pin);
+      else if (infoOpenRef.current && activePinRef.current === pin) renderCard(); // its card is open: add the weather button
     } catch (err: any) {
-      if (generation !== markerGenerationRef.current) return; // pin removed: nothing to do
+      if (isStale(pin.slot, generation)) return; // pin removed: nothing to do
       if (err?.name === 'AbortError') {
         // Weather was switched off mid-load: the toggle already relabelled the pin,
         // but a new pin still needs its card.
-        if (openCardWhenDone) openPlaceCard(pin);
+        if (openCardWhenDone) autoOpenPlaceCard(pin);
         return;
       }
       console.error('Weather error:', err);
       pin.label.innerText = '⚠️ N/A';
-      if (openCardWhenDone) openPlaceCard(pin); // the place info is still useful
+      if (openCardWhenDone) autoOpenPlaceCard(pin); // the place info is still useful
     }
   };
 
-  // Drops the place pin and opens its card. With weather on, the pin shows the
+  // Drops a place pin in `slot` and opens its card. With weather on, the pin shows the
   // temperature (loaded first); with weather off, it shows the place name.
   const createPlacePin = (
+    slot: PinSlot,
     position: google.maps.LatLng | google.maps.LatLngLiteral,
     placeInfo: PlaceInfo,
     targetMap: google.maps.Map,
-    // Which "generation" of markers this request belongs to (see clearMarkers).
-    generation: number = markerGenerationRef.current
+    // Which "generation" of the slot this request belongs to (see clearSlot).
+    generation: number
   ) => {
     if (!markerLibRef.current || !infoWindowRef.current) return;
-    if (generation !== markerGenerationRef.current) return; // already superseded
+    if (isStale(slot, generation)) return; // already superseded
 
     const label = document.createElement('div');
     label.className = 'weather-marker';
@@ -223,6 +260,7 @@ export const App: React.FC = () => {
     });
 
     const pin: PlacePin = {
+      slot,
       marker,
       label,
       map: targetMap,
@@ -231,12 +269,14 @@ export const App: React.FC = () => {
       placeInfo,
       weather: null,
     };
-    placePinRef.current = pin;
+    pinsRef.current[slot] = pin;
 
     // Clicking the pin opens the weather card, or the place card when there is no weather.
+    // The InfoWindow is shared, so this also closes the other pin's card.
     label.addEventListener('click', (e) => {
       e.stopPropagation();
       cardHiddenByZoomRef.current = false; // the user opened it on purpose
+      activePinRef.current = pin;
       currentCardRef.current = visibleWeather(pin) ? 'weather' : 'place';
       renderCard();
       infoWindowRef.current?.open(targetMap, marker);
@@ -347,7 +387,7 @@ export const App: React.FC = () => {
         if (cardHiddenByZoomRef.current) {
           // Zoomed back in: bring the card back on the same pin
           cardHiddenByZoomRef.current = false;
-          const pin = placePinRef.current;
+          const pin = activePinRef.current;
           if (pin && pin.marker.map) {
             renderCard();
             iw.open(map, pin.marker);
@@ -361,22 +401,30 @@ export const App: React.FC = () => {
       map.addListener('click', async (mapsMouseEvent: any) => {
         foldPanelOnPhone(); // tapping the map folds the controls away (phones)
         if (infoWindowRef.current) infoWindowRef.current.close();
-        const generation = clearMarkers();
+        cardHiddenByZoomRef.current = false; // the user dismissed the card
 
-        // Clicked empty map (not a named place): the old pin is already closed above,
-        // and we deliberately do not drop a new one.
-        if (!mapsMouseEvent.placeId) return;
+        // While a route is shown, its Start and destination pins stay put and the
+        // clicked place gets its own 'explore' pin.
+        const slot: PinSlot = routeActiveRef.current ? 'explore' : 'main';
 
-        // Clicked a named place (shop, park, ...): move the pin there.
+        // Clicked empty map (not a named place): the card is already closed above.
+        // Without a route, the pin goes too; with a route, every pin stays.
+        if (!mapsMouseEvent.placeId) {
+          if (slot === 'main') clearSlot('main');
+          return;
+        }
+
+        // Clicked a named place (shop, park, ...): move the slot's pin there.
         mapsMouseEvent.stop();
+        const generation = clearSlot(slot);
         const placeInfo = await lookUpPlace(mapsMouseEvent.placeId);
         // A newer click/search/route took over while we waited for Google.
-        if (generation !== markerGenerationRef.current) return;
+        if (isStale(slot, generation)) return;
         if (placeInfo) {
-          createPlacePin(mapsMouseEvent.latLng, placeInfo, map, generation);
+          createPlacePin(slot, mapsMouseEvent.latLng, placeInfo, map, generation);
         } else {
           // Place details failed: fall back to a reverse-geocoded pin at the clicked spot.
-          handleGeocodeFallback(mapsMouseEvent.latLng, map, generation);
+          handleGeocodeFallback(mapsMouseEvent.latLng, map, slot, generation);
         }
       });
     }).catch((err) => {
@@ -386,7 +434,7 @@ export const App: React.FC = () => {
     return () => {
       cancelled = true;
       if (created.map) google.maps.event.clearInstanceListeners(created.map);
-      clearMarkers();
+      clearAllPins();
       if (infoWindowRef.current) infoWindowRef.current.close();
       if (directionsRendererRef.current) directionsRendererRef.current.setMap(null);
     };
@@ -406,16 +454,27 @@ export const App: React.FC = () => {
     setShowWeather(isChecked);
     weatherOnRef.current = isChecked;
 
-    // Switch the pin that is already on the map (if any) in place.
-    const pin = placePinRef.current;
-    if (!pin) return;
-    if (isChecked && !pin.weather) {
-      loadPinWeather(pin, markerGenerationRef.current, false);
-      return;
-    }
-    if (!isChecked) cancelWeatherRequest();
-    pin.label.innerHTML = pinLabelHTML(pin.placeInfo, visibleWeather(pin));
+    // Switch the pins that are already on the map in place.
+    PIN_SLOTS.forEach((slot) => {
+      const pin = pinsRef.current[slot];
+      if (!pin) return;
+      if (isChecked && !pin.weather) {
+        loadPinWeather(pin, generationRef.current[slot], false);
+        return;
+      }
+      if (!isChecked) cancelWeatherRequest(slot);
+      pin.label.innerHTML = pinLabelHTML(pin.placeInfo, visibleWeather(pin));
+    });
     if (infoOpenRef.current) renderCard(); // add/remove the weather on the open card
+  };
+
+  // Removes the route line and summary (not the typed origin/destination text).
+  const hideRoute = () => {
+    if (directionsRendererRef.current) {
+      directionsRendererRef.current.setDirections({ routes: [] } as any);
+    }
+    setRouteSummary(null);
+    routeActiveRef.current = false;
   };
 
   const handleSearchLocation = async () => {
@@ -435,9 +494,10 @@ export const App: React.FC = () => {
       foldPanelOnPhone();
 
       if (infoWindowRef.current) infoWindowRef.current.close();
-      clearMarkers();
+      hideRoute(); // a search starts fresh: no route left without its pins
+      const generation = clearAllPins();
 
-      createPlacePin(pos, { name: result.name, address: result.country || '', mapsUri: '', accessibility: null }, mapInstance);
+      createPlacePin('main', pos, { name: result.name, address: result.country || '', mapsUri: '', accessibility: null }, mapInstance, generation);
     } catch (err) {
       console.error('Search error:', err);
       showToast('Search failed. Check your connection and try again.');
@@ -471,7 +531,8 @@ export const App: React.FC = () => {
           foldPanelOnPhone();
 
           if (infoWindowRef.current) infoWindowRef.current.close();
-          const generation = clearMarkers();
+          const generation = clearAllPins();
+          routeActiveRef.current = true; // from now on map clicks use the 'explore' pin
 
           // Green Origin Pin
           if (markerLibRef.current && leg.start_location) {
@@ -504,10 +565,10 @@ export const App: React.FC = () => {
             if (destPlaceId) {
               destInfo = await lookUpPlace(destPlaceId);
               // A newer click/search/route may have taken over while we waited for Google.
-              if (generation !== markerGenerationRef.current) return;
+              if (isStale('main', generation)) return;
             }
 
-            createPlacePin(leg.end_location, destInfo || fallbackInfo, mapInstance, generation);
+            createPlacePin('main', leg.end_location, destInfo || fallbackInfo, mapInstance, generation);
           }
         } else {
           setRouteSummary(null);
@@ -518,16 +579,14 @@ export const App: React.FC = () => {
     );
   };
 
+  // "Clear" button: removes the route, every pin and the typed origin/destination.
   const clearRoute = () => {
-    if (directionsRendererRef.current) {
-      directionsRendererRef.current.setDirections({ routes: [] } as any);
-    }
-    setRouteSummary(null);
+    hideRoute();
     setRouteOrigin('');
     originCoordsRef.current = null;
     setRouteDestination('');
     if (infoWindowRef.current) infoWindowRef.current.close();
-    clearMarkers();
+    clearAllPins();
   };
 
   // ---- Locate me ---------------------------------------------------------
@@ -559,12 +618,14 @@ export const App: React.FC = () => {
       mapInstance.setZoom(15);
       foldPanelOnPhone();
       if (infoWindowRef.current) infoWindowRef.current.close();
-      const generation = clearMarkers();
+      hideRoute(); // locate-me starts fresh: no route left without its pins
+      const generation = clearAllPins();
 
       const address = await reverseGeocodeAddress(pos);
       // A newer click/search/route took over while Google was answering.
-      if (generation !== markerGenerationRef.current) return;
+      if (isStale('main', generation)) return;
       createPlacePin(
+        'main',
         pos,
         {
           name: MY_LOCATION_LABEL,
