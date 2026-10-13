@@ -9,6 +9,7 @@ import { geolocationErrorMessage, getStartingCenter, requestPosition } from './s
 import { fetchDetailedWeather, getWeatherIcon, searchCity } from './services/weather';
 import type { WeatherResponse } from './services/weather';
 import { getPlaceDetails, placeInfoFromGeocode } from './services/places';
+import { directionsErrorMessage } from './services/directions';
 import { cardBandForZoom, renderPlaceCardHTML, renderWeatherCardHTML } from './cards';
 import type { CardBand } from './cards';
 import { ControlsPanel } from './components/ControlsPanel';
@@ -371,7 +372,7 @@ export const App: React.FC = () => {
       const result = await searchCity(searchQuery.trim());
 
       if (!result) {
-        alert('Location not found!');
+        showToast(`Couldn't find "${searchQuery.trim()}". Try a city or town name.`);
         return;
       }
 
@@ -389,12 +390,14 @@ export const App: React.FC = () => {
       }
     } catch (err) {
       console.error('Search error:', err);
+      showToast('Search failed. Check your connection and try again.');
     }
   };
 
   const calculateAndDisplayRoute = () => {
-    if (!routeOrigin.trim() || !routeDestination.trim() || !mapInstance || !directionsServiceRef.current) {
-      alert('Please enter both Origin and Destination.');
+    if (!mapInstance || !directionsServiceRef.current) return; // map not loaded yet
+    if (!routeOrigin.trim() || !routeDestination.trim()) {
+      showToast('Please enter both an origin and a destination.');
       return;
     }
 
@@ -460,7 +463,8 @@ export const App: React.FC = () => {
           }
         } else {
           setRouteSummary(null);
-          alert('Could not calculate directions: ' + status);
+          console.warn('Directions failed:', status);
+          showToast(directionsErrorMessage(status));
         }
       }
     );
