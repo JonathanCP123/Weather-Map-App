@@ -9,6 +9,7 @@ body, html, #root {
 
 #map {
   height: 100vh;
+  height: 100dvh;
   width: 100%;
 }
 
@@ -25,6 +26,7 @@ body, html, #root {
   box-shadow: 0 4px 20px rgba(0,0,0,0.18);
   width: 310px;
   max-height: 90vh;
+  max-height: 90dvh;
   overflow-y: auto;
   box-sizing: border-box;
   transition: all 0.3s ease;
@@ -201,6 +203,13 @@ body, html, #root {
   display: flex;
   align-items: center;
   gap: 5px;
+}
+
+/* Place name on a pin when weather is off: long names are cut off with "..." */
+.pin-place-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .weather-marker:hover {
@@ -412,6 +421,7 @@ body, html, #root {
     right: 0;
     width: 100%;
     max-height: 55vh;
+    max-height: 55dvh;
     border-radius: 20px 20px 0 0;
     padding: 14px 16px;
     box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.2);
@@ -455,6 +465,7 @@ body, html, #root {
   box-sizing: border-box;
   max-width: min(320px, calc(100vw - 96px));
   max-height: 60vh;                              /* never taller than 60% of the screen... */
+  max-height: 60dvh;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -605,6 +616,7 @@ body, html, #root {
 
   #map-controls {
     max-height: 42vh;
+    max-height: 42dvh;
   }
 
   /* little drag-handle look on top of the header */

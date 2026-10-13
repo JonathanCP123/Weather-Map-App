@@ -8,7 +8,7 @@ interface SearchSectionProps {
   onSearch: () => void;
 }
 
-/** "Explore Location": the weather-pins checkbox and the city search. */
+/** "Explore Location": the weather on/off checkbox and the city search. */
 export const SearchSection: React.FC<SearchSectionProps> = ({
   showWeather,
   onToggleWeather,
@@ -20,7 +20,7 @@ export const SearchSection: React.FC<SearchSectionProps> = ({
     <h3>Explore Location</h3>
     <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
       <input type="checkbox" checked={showWeather} onChange={onToggleWeather} />
-      <span>Show Weather Pins</span>
+      <span>Show Weather</span>
     </label>
 
     <div className="input-group">

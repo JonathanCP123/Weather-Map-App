@@ -11,7 +11,17 @@ export type CardBand = 'full' | 'compact' | 'hidden';
 export const cardBandForZoom = (zoom: number): CardBand =>
   zoom >= CARD_FULL_MIN_ZOOM ? 'full' : zoom >= CARD_HIDE_BELOW_ZOOM ? 'compact' : 'hidden';
 
-export const renderPlaceCardHTML = (placeInfo: PlaceInfo, band: CardBand): string => {
+/** What the pin itself shows: the current temperature, or just the place name when there is no weather. */
+export const pinLabelHTML = (placeInfo: PlaceInfo, weather: WeatherResponse | null): string => {
+  if (!weather) return `📍 <span class="pin-place-name">${escapeHtml(placeInfo.name)}</span>`;
+  const current = weather.current;
+  const temp = Math.round(current.temperature_2m);
+  const icon = getWeatherIcon(current.weather_code, current.precipitation, current.is_day);
+  return `${temp}°C ${icon} <span style="font-size: 11px; color: #1a73e8;">ℹ️</span>`;
+};
+
+/** `showWeatherButton` is false when weather is switched off or not loaded (yet). */
+export const renderPlaceCardHTML = (placeInfo: PlaceInfo, band: CardBand, showWeatherButton: boolean): string => {
   let accText = 'Accessibility status unknown';
   let accIcon = '♿';
   if (placeInfo.accessibility === true) {
@@ -37,7 +47,7 @@ export const renderPlaceCardHTML = (placeInfo: PlaceInfo, band: CardBand): strin
             <span class="acc-icon">${accIcon}</span>
             <span>${accText}</span>
         </div>
-        <div class="view-weather-btn-link" onclick="window.showWeatherCard()">View Weather Forecast ⛅</div>
+        ${showWeatherButton ? '<div class="view-weather-btn-link" onclick="window.showWeatherCard()">View Weather Forecast ⛅</div>' : ''}
     </div>
   `;
 };
