@@ -149,7 +149,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // Mount Window Functions for Inline Onclick Events
+  // The card HTML calls these from inline onclick handlers (see cards.ts)
   useEffect(() => {
     window.showPlaceCard = () => {
       currentCardRef.current = 'place';
@@ -354,9 +354,8 @@ export const App: React.FC = () => {
         center: startCenter,
         zoom: START_ZOOM,
         mapId: 'DEMO_MAP_ID',
-        mapTypeControl: false, // Ensure default is hidden
-        zoomControl: false, // Hide zoom for cleaner look if desired
-        // Add other options as needed
+        mapTypeControl: false, // replaced by our own Standard / Satellite toggle
+        zoomControl: false, // zoom by scrolling or pinching; keeps the map uncluttered on phones
       });
       created.map = map;
 
@@ -440,7 +439,7 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Toggle function
+  // Standard / satellite map
   const handleToggleMapType = () => {
     if (!mapInstance) return;
 

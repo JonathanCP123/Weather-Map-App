@@ -120,7 +120,7 @@ body, html, #root {
 }
 
 /* ==========================================================================
-   Unique Pill Switch Toggle
+   Map type toggle (Standard / Satellite pill switch)
    ========================================================================== */
 .custom-map-toggle-wrapper {
   display: flex;
@@ -452,19 +452,17 @@ body, html, #root {
 }
 
 /* ==========================================================================
-   COLLAPSIBLE CONTROLS PANEL + CAPPED CARD SIZE
-   Paste this block at the VERY END of src/styles.css (it relies on coming
-   after the existing rules, so it overrides them without you editing them).
-   If you pasted the earlier version of this block, DELETE it first and
-   paste this one instead.
+   Collapsible controls panel + card size limits
+   These rules come after the base styles above and override some of them,
+   so keep this section below them.
    ========================================================================== */
 
 /* --- Place / weather cards: they can never outgrow the screen ------------- */
 .place-card-popup,
 .unified-popup {
   box-sizing: border-box;
-  /* 100% = never wider than the space Google's InfoWindow gives the card. Without it, the
-     fixed 260px phone width overflowed and the right edge (title, last forecast box) was cut off. */
+  /* 100% = never wider than the space Google's InfoWindow gives the card (it reserves
+     room on the right for a scrollbar), so nothing gets clipped on narrow screens. */
   max-width: min(320px, calc(100vw - 96px), 100%);
   max-height: 60vh;                              /* never taller than 60% of the screen... */
   max-height: 60dvh;
@@ -478,8 +476,7 @@ body, html, #root {
   zoom: 0.85;
 }
 
-/* Hourly forecast: the 5 boxes must SHRINK to fit instead of overflowing the card
-   (this fixes the clipped "6 PM" box and the stray scrollbar under the card) */
+/* Hourly forecast: the 5 boxes shrink to fit the card instead of overflowing it */
 .hourly-container {
   gap: 4px;
 }
@@ -674,7 +671,7 @@ body, html, #root {
 }
 
 /* ==========================================================================
-   LOCATE ME: map button, origin-field button, message toast
+   Locate me: map button, origin-field button, message toast
    ========================================================================== */
 
 /* Round button sitting right under Google's fullscreen control */
